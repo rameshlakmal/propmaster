@@ -1,5 +1,5 @@
-import { formatKey, formatPairs, formatValue, plural, tableLabel } from '../format.js';
-import type { Change, Recording } from '../types.js';
+import { formatKey, formatPairs, formatTime, formatValue, plural, tableLabel } from '../format.js';
+import type { Change, Marker, Recording } from '../types.js';
 import { summarize } from './summary.js';
 
 const MAX_VALUE_LENGTH = 80;
@@ -31,6 +31,8 @@ export interface ExportOptions {
 }
 
 /** A Markdown report for bug tickets and pull requests. */
+const MARKER_LABEL = { pause: '‖ **Paused**', resume: '● **Resumed**', flag: '⚑ **Flagged**' } as const;
+
 export function toMarkdown(rec: Recording, { masked, hidden = 0 }: ExportOptions): string {
   const s = summarize(rec);
   const out: string[] = [
@@ -48,8 +50,12 @@ export function toMarkdown(rec: Recording, { masked, hidden = 0 }: ExportOptions
   for (const note of rec.notes) out.push(`> **Note:** ${cell(note)}`, '');
 
   for (const step of rec.steps) {
-    if (step.seq === 0 && step.changes.length === 0) continue;
+    const markers = step.markers ?? [];
+    if (step.seq === 0 && step.changes.length === 0 && markers.length === 0) continue;
     out.push(`## Step ${step.seq} · ${cell(step.name)} (${plural(step.changes.length, 'change')})`, '');
+    if (markers.length) {
+      out.push(...markers.map((m) => `- ${MARKER_LABEL[m.kind]} at ${formatTime(m.at)}${m.note ? `: ${cell(m.note)}` : ''}`), '');
+    }
     if (step.changes.length === 0) {
       out.push('_No database changes._', '');
       continue;

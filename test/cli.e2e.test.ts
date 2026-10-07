@@ -50,9 +50,18 @@ describe('propmaster CLI', () => {
     await db.query('SELECT place_order(1, 3, 2)');
     expect((await cli(['record', 'status'])).out).toContain('current step STEP 1 Click Place Order');
 
+    // Pause for setup that isn't part of the test, then flag what looks wrong.
+    expect((await cli(['record', 'pause'])).out).toContain(' ‖ PAUSED  changes are not recorded until you resume');
+    expect((await cli(['record', 'status'])).out).toMatch(/ ‖ PAUSED {2}Session #\d+ · CLI checkout/);
+    await db.query("UPDATE customers SET name = 'Setup' WHERE id = 1");
+    expect((await cli(['record', 'pause'])).err).toContain('The recording is already paused.');
+    expect((await cli(['record', 'resume'])).out).toContain(' ● REC  recording again');
+    expect((await cli(['record', 'flag', 'stock', 'looks', 'low'])).out).toContain(' ⚑ Flagged the current step · stock looks low');
+
     const stop = await cli(['record', 'stop']);
     expect(stop.code).toBe(0);
     expect(stop.out).toMatch(/ STEP 1 {2}Click Place Order +4 changes/);
+    expect(stop.out).toMatch(/ ‖ paused \d\d:\d\d:\d\d\n +● resumed \d\d:\d\d:\d\d\n +⚑ flagged \d\d:\d\d:\d\d · stock looks low/);
     expect(stop.out).toMatch(/│ update +│ inventory +│ product_id=3 +│ stock 6 → 4 +│/);
     expect(stop.out).toContain('total=84.50');
     expect(stop.out).toContain(' 4 changes · 4 tables · 3 inserts · 1 update');

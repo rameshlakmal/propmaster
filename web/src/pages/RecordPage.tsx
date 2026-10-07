@@ -1,10 +1,11 @@
 import { Badge, Box, Button, Card, Flex, Heading, RadioCards, Text, TextField } from '@radix-ui/themes';
-import { ArrowRight, Play, Plus, Stop } from '@phosphor-icons/react';
+import { ArrowRight, Flag, Pause, PictureInPicture, Play, Plus, Stop } from '@phosphor-icons/react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { EmptyState, ErrorCallout, PageHeader, TimelineSkeleton } from '../components/Feedback';
 import { Timeline } from '../components/Timeline';
 import { toError, useElapsed, useLoad } from '../hooks';
+import { useRecorderActions } from '../recorder';
 import type { ApiError, Recording, Status } from '../types';
 
 function StartForm({ installed, onStarted }: { installed: boolean; onStarted: () => void }) {
@@ -67,44 +68,35 @@ function StartForm({ installed, onStarted }: { installed: boolean; onStarted: ()
   );
 }
 
-function Recorder({ status, onChange, onStopped }: { status: Status; onChange: () => void; onStopped: (rec: Recording) => void }) {
+export interface FloatingControl {
+  supported: boolean;
+  isOpen: boolean;
+  open: () => Promise<void>;
+  close: () => void;
+}
+
+function Recorder({ status, onChange, onStopped, floating }: { status: Status; onChange: () => void; onStopped: (rec: Recording) => void; floating: FloatingControl }) {
   const active = status.active!;
   const elapsed = useElapsed(active.startedAt);
   const [stepName, setStepName] = useState('');
-  const [busy, setBusy] = useState<'step' | 'stop' | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const noteInput = useRef<HTMLInputElement>(null);
   const live = useLoad(() => api<Recording>('GET', `/sessions/${active.id}`), [active.id, active.stepSeq], 1500);
+  const actions = useRecorderActions({ onChange: () => { onChange(); void live.refresh(); }, onStopped });
+  const noting = note !== null;
+
+  useEffect(() => { if (noting) noteInput.current?.focus(); }, [noting]);
 
   const addStep = async (e: FormEvent) => {
     e.preventDefault();
     if (!stepName.trim()) { input.current?.focus(); return; }
-    setBusy('step');
-    setError(null);
-    try {
-      await api('POST', '/record/step', { name: stepName.trim() });
-      setStepName('');
-      onChange();
-      void live.refresh();
-    } catch (err) {
-      setError(toError(err));
-    } finally {
-      setBusy(null);
-      input.current?.focus();
-    }
+    if (await actions.step(stepName.trim())) setStepName('');
+    input.current?.focus();
   };
-
-  const stop = async () => {
-    setBusy('stop');
-    setError(null);
-    try {
-      onStopped(await api<Recording>('POST', '/record/stop'));
-      onChange();
-    } catch (err) {
-      setError(toError(err));
-    } finally {
-      setBusy(null);
-    }
+  const addFlag = async (e: FormEvent) => {
+    e.preventDefault();
+    if (await actions.flag(note ?? '')) setNote(null);
   };
 
   return (
@@ -112,18 +104,46 @@ function Recorder({ status, onChange, onStopped }: { status: Status; onChange: (
       <Card size="3" mb="5">
         <Flex justify="between" align="center" gap="3" wrap="wrap" mb="4">
           <Flex align="center" gap="3">
-            <Badge color="red" variant="soft" size="2"><span className="rec-dot" /> REC</Badge>
+            {active.paused
+              ? <Badge color="amber" variant="soft" size="2"><Pause weight="fill" size={10} /> PAUSED</Badge>
+              : <Badge color="red" variant="soft" size="2"><span className="rec-dot" /> REC</Badge>}
             <Heading size="4">{active.name}</Heading>
             <Text size="2" color="gray">#{active.id}</Text>
           </Flex>
-          <Flex align="center" gap="3">
+          <Flex align="center" gap="3" wrap="wrap">
             <Text size="2" color="gray" className="mono">{elapsed}</Text>
             {active.mode === 'snapshot' && <Badge variant="outline" color="gray">snapshot mode</Badge>}
-            <Button color="red" variant="soft" onClick={() => void stop()} loading={busy === 'stop'} className="press">
+            {floating.supported
+              ? (
+                <Button variant="soft" color="gray" onClick={() => void (floating.isOpen ? floating.close() : floating.open())} className="press">
+                  <PictureInPicture /> {floating.isOpen ? 'Close floating window' : 'Pop out'}
+                </Button>
+              )
+              : <Text size="1" color="gray">Pop out needs Chrome or Edge</Text>}
+            {active.paused
+              ? <Button variant="soft" onClick={() => void actions.resume()} loading={actions.busy === 'resume'} className="press"><Play weight="fill" /> Resume</Button>
+              : <Button variant="soft" color="amber" onClick={() => void actions.pause()} loading={actions.busy === 'pause'} className="press"><Pause weight="fill" /> Pause</Button>}
+            <Button variant={noting ? 'solid' : 'soft'} color="amber" onClick={() => setNote(noting ? null : '')} aria-expanded={noting} className="press">
+              <Flag weight="fill" /> Flag
+            </Button>
+            <Button color="red" variant="soft" onClick={() => void actions.stop()} loading={actions.busy === 'stop'} className="press">
               <Stop weight="fill" /> Stop
             </Button>
           </Flex>
         </Flex>
+
+        {noting && (
+          <form onSubmit={addFlag}>
+            <Flex gap="2" mb="4">
+              <Box flexGrow="1">
+                <TextField.Root ref={noteInput} value={note} onChange={(e) => setNote(e.target.value)} aria-label="Flag note"
+                  placeholder="What looks wrong? (optional) e.g. the total shows 0.00"
+                  onKeyDown={(e) => { if (e.key === 'Escape') setNote(null); }} />
+              </Box>
+              <Button type="submit" color="amber" loading={actions.busy === 'flag'}>Flag step {active.stepSeq}</Button>
+            </Flex>
+          </form>
+        )}
 
         <form onSubmit={addStep}>
           <Text as="label" size="2" weight="medium" htmlFor="step-name">Next step</Text>
@@ -132,20 +152,23 @@ function Recorder({ status, onChange, onStopped }: { status: Status; onChange: (
               <TextField.Root id="step-name" ref={input} size="3" autoFocus value={stepName}
                 onChange={(e) => setStepName(e.target.value)} placeholder="What are you about to do? e.g. Click Place Order" />
             </Box>
-            <Button type="submit" size="3" loading={busy === 'step'} className="press">
+            <Button type="submit" size="3" loading={actions.busy === 'step'} className="press">
               <Plus weight="bold" /> Add step
             </Button>
           </Flex>
-          <Text as="p" size="1" color="gray" mt="2">
-            Press Enter to add it, then do that action in the app. Now on step {active.stepSeq}: {active.stepName}.
+          <Text as="p" size="1" color={active.paused ? 'amber' : 'gray'} mt="2">
+            {active.paused
+              ? `Paused: changes are not recorded until you resume. Now on step ${active.stepSeq}: ${active.stepName}.`
+              : `Press Enter to add it, then do that action in the app. Now on step ${active.stepSeq}: ${active.stepName}.`}
+            {floating.supported && !floating.isOpen && ' Pop out keeps these controls on top of the app you are testing.'}
           </Text>
         </form>
-        {error && <Box mt="4"><ErrorCallout error={error} /></Box>}
+        {actions.error && <Box mt="4"><ErrorCallout error={actions.error} /></Box>}
       </Card>
 
       {live.error && <Box mb="4"><ErrorCallout error={live.error} /></Box>}
       {!live.data ? <TimelineSkeleton /> : (
-        live.data.summary.changes === 0 && active.stepSeq === 0
+        live.data.summary.changes === 0 && active.stepSeq === 0 && live.data.steps.every((st) => st.markers.length === 0)
           ? <EmptyState icon={<Plus size={32} />} title="No steps yet">Add your first step above, then do it in the app. Changes appear here as they happen.</EmptyState>
           : <Timeline steps={live.data.steps} currentSeq={active.stepSeq} />
       )}
@@ -177,11 +200,19 @@ function StoppedView({ stopped, onAgain }: { stopped: Recording; onAgain: () => 
   );
 }
 
-export function RecordPage({ status, statusError, onChange }: { status: Status | null; statusError: ApiError | null; onChange: () => void }) {
-  const [stopped, setStopped] = useState<Recording | null>(null);
+interface RecordPageProps {
+  status: Status | null;
+  statusError: ApiError | null;
+  onChange: () => void;
+  stopped: Recording | null;
+  onStopped: (rec: Recording | null) => void;
+  floating: FloatingControl;
+}
+
+export function RecordPage({ status, statusError, onChange, stopped, onStopped, floating }: RecordPageProps) {
   // Keep the page title in step with the recording, so the browser tab shows it too.
   useEffect(() => {
-    document.title = status?.active ? `● REC ${status.active.name} · Propmaster` : 'Propmaster';
+    document.title = status?.active ? `${status.active.paused ? '‖ PAUSED' : '● REC'} ${status.active.name} · Propmaster` : 'Propmaster';
   }, [status?.active]);
 
   if (!status) {
@@ -194,10 +225,10 @@ export function RecordPage({ status, statusError, onChange }: { status: Status |
         description={status.active ? 'Add a step before each action. Changes appear as the app makes them.' : 'Record what your test does to the database, step by step.'}
       />
       {status.active
-        ? <Recorder key={status.active.id} status={status} onChange={onChange} onStopped={setStopped} />
+        ? <Recorder key={status.active.id} status={status} onChange={onChange} onStopped={onStopped} floating={floating} />
         : stopped
-          ? <StoppedView stopped={stopped} onAgain={() => setStopped(null)} />
-          : <StartForm installed={status.installed} onStarted={() => { setStopped(null); onChange(); }} />}
+          ? <StoppedView stopped={stopped} onAgain={() => onStopped(null)} />
+          : <StartForm installed={status.installed} onStarted={() => { onStopped(null); onChange(); }} />}
     </Box>
   );
 }

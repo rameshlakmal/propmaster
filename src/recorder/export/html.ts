@@ -1,5 +1,5 @@
-import { columnDiffs, formatKey, formatPairs, formatValue, plural, tableLabel } from '../format.js';
-import type { Change, Recording } from '../types.js';
+import { columnDiffs, formatKey, formatPairs, formatTime, formatValue, plural, tableLabel } from '../format.js';
+import type { Change, Marker, Recording } from '../types.js';
 import type { ExportOptions } from './markdown.js';
 import { summarize } from './summary.js';
 
@@ -123,6 +123,10 @@ header h1 { font-size: 26px; line-height: 1.2; margin: 6px 0 18px; letter-spacin
 .step { margin-top: 28px; }
 .step h2 { font-size: 17px; margin: 0 0 10px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .step h2 .seq { color: var(--ink-3); font-weight: 600; font-variant-numeric: tabular-nums; }
+.markers { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.marker time { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.marker.flag { padding: 6px 10px; border-left: 3px solid var(--update); background: var(--update-bg); border-radius: 6px; }
+.marker.pause, .marker.resume { color: var(--ink-3); }
 .step h2 .count { color: var(--ink-3); font-size: 13px; font-weight: 500; }
 .empty { color: var(--ink-3); font-style: italic; margin: 0; }
 .change { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; }
@@ -184,14 +188,21 @@ for (const b of buttons) b.addEventListener('click', () => {
 });
 `;
 
+const MARKER_LABEL = { pause: '‖ Paused', resume: '● Resumed', flag: '⚑ Flagged' } as const;
+
+function renderMarker(m: Marker): string {
+  return `<li class="marker ${m.kind}"><strong>${MARKER_LABEL[m.kind]}</strong> <time>${formatTime(m.at)}</time>${m.note ? ` · ${e(m.note)}` : ''}</li>`;
+}
+
 /** A self-contained HTML report: no external files, safe to attach to a ticket or open offline. */
 export function toHtml(rec: Recording, { masked, hidden = 0 }: ExportOptions): string {
   const s = summarize(rec);
   const steps = rec.steps
-    .filter((st) => !(st.seq === 0 && st.changes.length === 0))
+    .filter((st) => !(st.seq === 0 && st.changes.length === 0 && !st.markers?.length))
     .map((st) => `
     <section class="step">
       <h2><span class="seq">Step ${st.seq}</span> ${e(st.name)} <span class="count">${plural(st.changes.length, 'change')}</span></h2>
+      ${st.markers?.length ? `<ul class="markers">${st.markers.map(renderMarker).join('')}</ul>` : ''}
       ${st.changes.length === 0 ? '<p class="empty">No database changes.</p>' : st.changes.map(renderChange).join('')}
     </section>`).join('');
 

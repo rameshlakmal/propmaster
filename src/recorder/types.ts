@@ -26,11 +26,20 @@ export interface Change {
   clientAddr: string | null;
 }
 
+/** Something the tester marked during a step: a pause, a resume, or a flag ("this looks wrong") with a note. */
+export interface Marker {
+  kind: 'pause' | 'resume' | 'flag';
+  note: string | null;
+  at: Date;
+}
+
 export interface Step {
   seq: number;
   name: string;
   startedAt: Date;
   changes: Change[];
+  /** Pauses, resumes and flags during this step, in time order. */
+  markers?: Marker[];
 }
 
 export interface Column {

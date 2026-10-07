@@ -1,6 +1,7 @@
 import { Badge, Box, Card, Flex, Heading, Table, Text } from '@radix-ui/themes';
+import { Flag, Pause, Play } from '@phosphor-icons/react';
 import { Fragment, useState } from 'react';
-import type { Change, Step } from '../types';
+import type { Change, Marker, Step } from '../types';
 
 const SUMMARY_LIMIT = 48;
 
@@ -112,23 +113,49 @@ function StepTable({ step }: { step: Step }) {
   );
 }
 
+const MARKER = {
+  pause: { icon: <Pause weight="fill" size={14} />, label: 'Paused' },
+  resume: { icon: <Play weight="fill" size={14} />, label: 'Resumed' },
+  flag: { icon: <Flag weight="fill" size={14} />, label: 'Flagged' },
+} as const;
+
+/** Pauses, resumes and flags in a step: flags stand out, pauses are quiet. */
+function Markers({ markers }: { markers: Marker[] }) {
+  return (
+    <Flex direction="column" gap="1" mb="3" asChild>
+      <ul className="markers">
+        {markers.map((m, i) => (
+          <li key={i} className={`marker marker-${m.kind}`}>
+            {MARKER[m.kind].icon}
+            <Text size="2" weight={m.kind === 'flag' ? 'medium' : 'regular'}>{MARKER[m.kind].label}</Text>
+            <Text size="1" color="gray" className="mono">{new Date(m.at).toLocaleTimeString()}</Text>
+            {m.note && <Text size="2">{m.note}</Text>}
+          </li>
+        ))}
+      </ul>
+    </Flex>
+  );
+}
+
 /** Steps with their changes. `currentSeq` highlights the step being recorded. */
 export function Timeline({ steps, currentSeq }: { steps: Step[]; currentSeq?: number }) {
-  const shown = steps.filter((s) => !(s.seq === 0 && s.changes.length === 0));
+  const shown = steps.filter((s) => !(s.seq === 0 && s.changes.length === 0 && s.markers.length === 0));
   return (
     <Flex direction="column" gap="5">
       {shown.map((step) => (
         <Card key={step.seq} size="2" className={step.seq === currentSeq ? 'step-current' : undefined}>
-          <Flex justify="between" align="center" mb={step.changes.length ? '3' : '0'} gap="3" wrap="wrap">
+          <Flex justify="between" align="center" mb={step.changes.length || step.markers.length ? '3' : '0'} gap="3" wrap="wrap">
             <Flex align="center" gap="3">
               <Badge color={step.seq === currentSeq ? 'cyan' : 'gray'} variant="soft" size="2">Step {step.seq}</Badge>
               <Heading as="h3" size="3" weight="medium">{step.name}</Heading>
               {step.seq === currentSeq && <Text size="1" color="cyan">now</Text>}
+              {step.markers.some((m) => m.kind === 'flag') && <Badge color="amber" variant="soft"><Flag weight="fill" size={12} /> flagged</Badge>}
             </Flex>
             <Text size="2" color="gray">
               {step.changes.length === 1 ? '1 change' : `${step.changes.length} changes`}
             </Text>
           </Flex>
+          {step.markers.length > 0 && <Markers markers={step.markers} />}
           {step.changes.length === 0
             ? <Text size="2" color="gray" mt="2" as="p">{step.seq === currentSeq ? 'Waiting for the app to change something…' : 'No database changes.'}</Text>
             : <StepTable step={step} />}

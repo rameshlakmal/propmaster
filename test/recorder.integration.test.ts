@@ -451,6 +451,7 @@ describe('excluding tables and pruning', () => {
     expect(rows).toEqual([
       { relname: 'changes', relpersistence: 'u' },
       { relname: 'excluded_tables', relpersistence: 'p' },
+      { relname: 'markers', relpersistence: 'p' },
       { relname: 'sessions', relpersistence: 'p' },
       { relname: 'state', relpersistence: 'p' },
       { relname: 'steps', relpersistence: 'p' },

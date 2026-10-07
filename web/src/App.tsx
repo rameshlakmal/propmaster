@@ -1,13 +1,14 @@
 import { Box, Flex, Select, Text } from '@radix-ui/themes';
 import { Database, ListChecks, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { api } from './api';
-import { useLoad, useRoute } from './hooks';
+import { floatingSupported, useFloatingWindow } from './floating';
+import { useLoad, useRoute, useSystemAppearance } from './hooks';
 import { RecordPage } from './pages/RecordPage';
 import { RulesPage } from './pages/RulesPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { SetupPage } from './pages/SetupPage';
-import type { Config, Status } from './types';
+import type { Config, Recording, Status } from './types';
 
 function NavItem({ to, current, icon, children }: { to: string; current: boolean; icon: ReactNode; children: ReactNode }) {
   return (
@@ -24,6 +25,10 @@ export function App() {
   const hasProfile = (config.data?.profiles.length ?? 0) > 0;
   // The sidebar's recording indicator, and every page, use the same live status.
   const status = useLoad(() => api<Status>('GET', '/status'), [config.data?.active], hasProfile ? 2000 : undefined);
+  // The last stopped recording, shown on the Record page whether it was stopped there or in the floating window.
+  const [stopped, setStopped] = useState<Recording | null>(null);
+  // Lives here, not on the Record page, so the floating window stays open while you look at other pages.
+  const floating = useFloatingWindow({ appearance: useSystemAppearance(), onChange: () => void status.refresh(), onStopped: setStopped });
 
   const switchProfile = async (name: string) => {
     await api('POST', `/profiles/${encodeURIComponent(name)}/activate`);
@@ -40,7 +45,8 @@ export function App() {
       ? <SetupPage config={config.data} status={status.data} onChanged={onProfilesChanged} />
       : route.page === 'sessions' ? <SessionsPage selectedId={route.id} activeProfile={config.data.active} />
       : route.page === 'rules' ? <RulesPage activeProfile={config.data.active} />
-      : <RecordPage status={status.data} statusError={status.error} onChange={status.refresh} />;
+      : <RecordPage status={status.data} statusError={status.error} onChange={status.refresh} stopped={stopped} onStopped={setStopped}
+          floating={{ supported: floatingSupported, isOpen: floating.isOpen, open: floating.open, close: floating.close }} />;
 
   const recording = status.data?.active;
 

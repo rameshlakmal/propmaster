@@ -225,3 +225,73 @@ body {
 .rt-TableRoot {
   overflow-x: auto;
 }
+
+/* ---------- markers: pauses, resumes and flags in a step ---------- */
+
+.markers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  color: var(--gray-11);
+}
+
+.marker-flag {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--amber-9);
+  border-radius: var(--radius-2);
+  background: var(--amber-a3);
+  color: var(--amber-12);
+}
+
+/* ---------- the floating recorder window ---------- */
+
+.floating-theme {
+  min-height: 100dvh;
+}
+
+.floating {
+  box-sizing: border-box;
+}
+
+.floating-step {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-2);
+  background: var(--gray-a2);
+  box-shadow: inset 3px 0 0 var(--accent-9);
+}
+
+.floating-feed {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--gray-a5);
+}
+
+.floating-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.floating-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.floating-list .op {
+  min-width: 52px;
+}
+
+.floating-table,
+.floating-key {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

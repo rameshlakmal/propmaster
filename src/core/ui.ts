@@ -66,6 +66,8 @@ export const icons = (c: Colors) => ({
   rec: c.red('●'),
   idle: c.dim('○'),
   stop: c.green('■'),
+  pause: c.yellow('‖'),
+  flag: c.yellow('⚑'),
 });
 
 /** Puts space-separated items on as few lines as fit, every line indented. Long items get a line of their own. */

@@ -13,10 +13,14 @@ export interface ActiveSession {
   startedAt: Date;
   stepSeq: number;
   stepName: string;
+  /** Paused: the session is open, but changes aren't recorded. */
+  paused: boolean;
 }
 
 export interface RecorderStatus {
   installed: boolean;
+  /** The recorder in the database predates pause, resume and flag: installing again upgrades it. */
+  outdated: boolean;
   watchedTables: number;
   excludedTables: string[];
   active: ActiveSession | null;
@@ -47,9 +51,9 @@ export async function status(db: Db, identity: string): Promise<RecorderStatus> 
   const s = await trigger.status(db);
   const snap = await activeSnapshotFor(identity);
   const active: ActiveSession | null = snap
-    ? { id: snap.id, name: snap.name, mode: 'snapshot', startedAt: snap.startedAt, stepSeq: snap.stepSeq, stepName: snap.stepName }
+    ? { id: snap.id, name: snap.name, mode: 'snapshot', startedAt: snap.startedAt, stepSeq: snap.stepSeq, stepName: snap.stepName, paused: snap.paused }
     : s.active ? { ...s.active, mode: 'trigger' } : null;
-  return { installed: s.installed, watchedTables: s.watchedTables, excludedTables: s.excludedTables, active };
+  return { installed: s.installed, outdated: s.outdated, watchedTables: s.watchedTables, excludedTables: s.excludedTables, active };
 }
 
 export async function start(db: Db, identity: string, name: string, options: StartOptions = {}): Promise<Started> {
@@ -67,6 +71,22 @@ export async function start(db: Db, identity: string, name: string, options: Sta
 
 export async function step(db: Db, identity: string, name: string): Promise<number> {
   return (await activeSnapshotFor(identity)) ? snapshot.stepSnapshot(db, identity, name) : trigger.step(db, name);
+}
+
+export async function pause(db: Db, identity: string): Promise<void> {
+  if (await activeSnapshotFor(identity)) await snapshot.pauseSnapshot(db, identity);
+  else await trigger.pause(db);
+}
+
+export async function resume(db: Db, identity: string): Promise<void> {
+  if (await activeSnapshotFor(identity)) await snapshot.resumeSnapshot(db, identity);
+  else await trigger.resume(db);
+}
+
+/** Marks the current step ("this looks wrong"), with an optional note. */
+export async function flag(db: Db, identity: string, note = ''): Promise<void> {
+  if (await activeSnapshotFor(identity)) await snapshot.flagSnapshot(identity, note);
+  else await trigger.flag(db, note);
 }
 
 export async function stop(db: Db, identity: string): Promise<Recording> {

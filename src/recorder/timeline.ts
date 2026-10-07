@@ -1,7 +1,7 @@
 import { boxTable, brand, cell, divider, makeStyle, spread, type Cell, type Colors, type Column, type Token } from '../core/ui.js';
 import { summarize } from './export/summary.js';
-import { formatDateTime, formatDuration, formatValue, plural, tableLabel, utcOffset } from './format.js';
-import type { Change, Recording, Row } from './types.js';
+import { formatDateTime, formatDuration, formatTime, formatValue, plural, tableLabel, utcOffset } from './format.js';
+import type { Change, Marker, Recording, Row } from './types.js';
 
 const MAX_VALUE_LENGTH = 40;
 
@@ -55,6 +55,15 @@ export function changeRow(change: Change, c: Colors): Cell[] {
   return [op, table, key, changes];
 }
 
+const MARKER_TEXT = { pause: 'paused', resume: 'resumed', flag: 'flagged' } as const;
+
+/** One line per pause, resume or flag, e.g. "⚑ flagged 10:42:07 · total shows 0.00". */
+export function markerLine(m: Marker, c: Colors): string {
+  const icon = m.kind === 'flag' ? c.yellow('⚑') : m.kind === 'pause' ? c.yellow('‖') : c.red('●');
+  const text = m.kind === 'resume' ? MARKER_TEXT[m.kind] : c.yellow(MARKER_TEXT[m.kind]);
+  return `   ${icon} ${text} ${c.dim(formatTime(m.at))}${m.note ? ` ${c.dim('·')} ${m.note}` : ''}`;
+}
+
 export interface TimelineOptions {
   colors?: Colors;
   width?: number;
@@ -81,9 +90,11 @@ export function formatTimeline(rec: Recording, { colors, width, hidden = 0 }: Ti
 
   for (const step of rec.steps) {
     // Step 0 collects changes made before the first named step; hide it when empty.
-    if (step.seq === 0 && step.changes.length === 0) continue;
+    const markers = step.markers ?? [];
+    if (step.seq === 0 && step.changes.length === 0 && markers.length === 0) continue;
     lines.push('');
     lines.push(spread(` ${c.cyan(c.bold(`STEP ${step.seq}`))}  ${c.bold(step.name)}`, c.dim(plural(step.changes.length, 'change')), s.width));
+    lines.push(...markers.map((m) => markerLine(m, c)));
     if (step.changes.length === 0) lines.push(`   ${c.dim('no database changes')}`);
     else lines.push(...boxTable(s, COLUMNS, step.changes.map((ch) => changeRow(ch, c)), { measure }));
   }

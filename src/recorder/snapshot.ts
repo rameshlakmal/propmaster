@@ -10,7 +10,7 @@ import { UserError } from '../core/errors.js';
 import { parseJsonExact } from '../core/json.js';
 import { loadColumns } from './catalog.js';
 import { matchesTable } from './filter.js';
-import { orderColumns, tableKey, type Change, type Recording, type Row, type SessionSummary } from './types.js';
+import { orderColumns, tableKey, type Change, type Marker, type Recording, type Row, type SessionSummary } from './types.js';
 
 export const DEFAULT_MAX_ROWS = 50_000;
 
@@ -41,6 +41,8 @@ interface StoredSession {
   identity: string;
   options: Required<SnapshotOptions>;
   recording: Recording;
+  /** While paused nothing is compared: resuming takes a fresh snapshot to compare against. */
+  paused?: boolean;
 }
 
 export interface ActiveSnapshot {
@@ -50,6 +52,7 @@ export interface ActiveSnapshot {
   startedAt: Date;
   stepSeq: number;
   stepName: string;
+  paused: boolean;
 }
 
 function home(): string {
@@ -81,6 +84,7 @@ function reviveDates(rec: Recording): Recording {
       ...s,
       startedAt: new Date(s.startedAt),
       changes: s.changes.map((c) => ({ ...c, changedAt: new Date(c.changedAt) })),
+      ...(s.markers ? { markers: s.markers.map((m) => ({ ...m, at: new Date(m.at) })) } : {}),
     })),
   };
 }
@@ -278,9 +282,40 @@ export async function startSnapshot(db: Db, identity: string, name: string, opti
   return { id, tables: snapshot.tables.length, skipped: snapshot.skipped };
 }
 
+function addMarker(session: StoredSession, kind: Marker['kind'], note: string | null = null): void {
+  const last = session.recording.steps[session.recording.steps.length - 1]!;
+  (last.markers ??= []).push({ kind, note, at: new Date() });
+}
+
+/** Pausing finishes the current comparison, so what happened before the pause stays in the step. */
+export async function pauseSnapshot(db: Db, identity: string): Promise<void> {
+  const { id, session } = await requireActive(identity);
+  if (session.paused) throw new UserError('The recording is already paused.');
+  await captureStep(db, id, session);
+  session.paused = true;
+  addMarker(session, 'pause');
+  await writeJson(sessionFile(id), session);
+}
+
+/** Resuming takes a fresh snapshot: whatever changed while paused is never reported. */
+export async function resumeSnapshot(db: Db, identity: string): Promise<void> {
+  const { id, session } = await requireActive(identity);
+  if (!session.paused) throw new UserError('The recording is already running.');
+  await writeJson(stateFile(id), await takeSnapshot(db, session.options));
+  session.paused = false;
+  addMarker(session, 'resume');
+  await writeJson(sessionFile(id), session);
+}
+
+export async function flagSnapshot(identity: string, note: string): Promise<void> {
+  const { id, session } = await requireActive(identity);
+  addMarker(session, 'flag', note.trim() || null);
+  await writeJson(sessionFile(id), session);
+}
+
 export async function stepSnapshot(db: Db, identity: string, name: string): Promise<number> {
   const { id, session } = await requireActive(identity);
-  await captureStep(db, id, session);
+  if (!session.paused) await captureStep(db, id, session);
   const seq = session.recording.steps.length;
   session.recording.steps.push({ seq, name, startedAt: new Date(), changes: [] });
   await writeJson(sessionFile(id), session);
@@ -289,7 +324,8 @@ export async function stepSnapshot(db: Db, identity: string, name: string): Prom
 
 export async function stopSnapshot(db: Db, identity: string): Promise<Recording> {
   const { id, session } = await requireActive(identity);
-  await captureStep(db, id, session);
+  if (!session.paused) await captureStep(db, id, session);
+  session.paused = false;
   session.recording.stoppedAt = new Date();
   await writeJson(sessionFile(id), session);
   await rm(stateFile(id), { force: true });
@@ -302,7 +338,7 @@ export async function activeSnapshot(): Promise<ActiveSnapshot | null> {
   const session = id ? await readSession(id) : null;
   if (!id || !session) return null;
   const last = session.recording.steps[session.recording.steps.length - 1]!;
-  return { id, name: session.recording.name, identity: session.identity, startedAt: session.recording.startedAt, stepSeq: last.seq, stepName: last.name };
+  return { id, name: session.recording.name, identity: session.identity, startedAt: session.recording.startedAt, stepSeq: last.seq, stepName: last.name, paused: !!session.paused };
 }
 
 export async function getSnapshotRecording(id: string): Promise<Recording | null> {

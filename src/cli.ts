@@ -131,6 +131,7 @@ program
     const s = await trigger.status(db);
     say(` ${i.ok} Recorder installed ${c.dim(`· watching ${s.watchedTables} tables (${attached} new)`)}`);
     if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);
+    if (s.outdated) say(`   ${c.yellow('! The recorder is from an older version: pause, resume and flag need an upgrade.')}`, hint(c, 'propmaster install   (recordings are kept)'));
     say(hint(c, 'next: propmaster record start "My test"'));
   }));
 
@@ -197,6 +198,32 @@ record
     say(spread(` ${c.cyan(c.bold(`STEP ${seq}`))}  ${c.bold(name)}`, c.dim('recording'), ui.width));
   }));
 
+record
+  .command('pause')
+  .description('Pause recording: the session stays open, but changes are not recorded')
+  .action(run(async (ctx) => {
+    await sessions.pause(ctx.db, ctx.identity);
+    say(` ${i.pause} ${c.yellow(c.bold('PAUSED'))}  ${c.dim('changes are not recorded until you resume')}`, hint(c, 'propmaster record resume'));
+  }));
+
+record
+  .command('resume')
+  .description('Resume a paused recording')
+  .action(run(async (ctx) => {
+    await sessions.resume(ctx.db, ctx.identity);
+    say(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.dim('recording again')}`);
+  }));
+
+record
+  .command('flag')
+  .argument('[note...]', 'what looks wrong, e.g. "total shows 0.00"')
+  .description('Flag the current step, with an optional note')
+  .action(run(async (ctx, note: string[] = []) => {
+    const text = note.join(' ');
+    await sessions.flag(ctx.db, ctx.identity, text);
+    say(` ${i.flag} ${c.yellow(c.bold('Flagged'))} the current step${text ? c.dim(` · ${text}`) : ''}`);
+  }));
+
 addFilterOptions(record
   .command('stop')
   .description('Stop recording and show the timeline')
@@ -214,11 +241,13 @@ record
     const s = await sessions.status(ctx.db, ctx.identity);
     if (s.active) {
       const detail = s.active.mode === 'snapshot' ? 'snapshot mode' : `${s.watchedTables} tables watched`;
-      say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(detail), ui.width),
+      const badge = s.active.paused ? `${i.pause} ${c.yellow(c.bold('PAUSED'))}` : `${i.rec} ${c.red(c.bold('REC'))}`;
+      say(spread(` ${badge}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(detail), ui.width),
         `   ${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`);
     } else if (!s.installed) say(` ${i.idle} Not recording. The recorder is not installed.`, hint(c, 'propmaster install, or propmaster record start --snapshot'));
     else say(` ${i.idle} Not recording ${c.dim(`· ${s.watchedTables} tables watched`)}`);
     if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);
+    if (s.outdated) say(`   ${c.yellow('! The recorder is from an older version: pause, resume and flag need an upgrade.')}`, hint(c, 'propmaster install   (recordings are kept)'));
   }));
 
 addFilterOptions(record

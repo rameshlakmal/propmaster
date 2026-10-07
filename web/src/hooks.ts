@@ -32,8 +32,12 @@ export function toError(err: unknown): ApiError {
   return { message: String(err) };
 }
 
-/** Loads data, and again every `everyMs` while given. Keeps the last good data during a refresh. */
-export function useLoad<T>(load: () => Promise<T>, deps: unknown[], everyMs?: number) {
+/**
+ * Loads data, and again every `everyMs` while given. Keeps the last good data during a refresh.
+ * `timers` is the window whose clock drives the polling: the floating window passes its own, because
+ * the browser slows timers right down in a tab that's in the background.
+ */
+export function useLoad<T>(load: () => Promise<T>, deps: unknown[], everyMs?: number, timers: Window = window) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,8 +60,8 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[], everyMs?: nu
     setLoading(true);
     void refresh();
     if (!everyMs) return;
-    const timer = setInterval(() => void refresh(), everyMs);
-    return () => clearInterval(timer);
+    const timer = timers.setInterval(() => void refresh(), everyMs);
+    return () => timers.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, everyMs]);
 
@@ -65,13 +69,13 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[], everyMs?: nu
 }
 
 /** Seconds since a moment, ticking once a second: "4m 12s". */
-export function useElapsed(since: string | null): string {
+export function useElapsed(since: string | null, timers: Window = window): string {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!since) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [since]);
+    const timer = timers.setInterval(() => setNow(Date.now()), 1000);
+    return () => timers.clearInterval(timer);
+  }, [since, timers]);
   if (!since) return '';
   const s = Math.max(0, Math.round((now - new Date(since).getTime()) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
@@ -80,4 +84,16 @@ export function useElapsed(since: string | null): string {
 export function formatWhen(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Follows the operating system's light or dark setting, live. */
+export function useSystemAppearance(): 'light' | 'dark' {
+  const [dark, setDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+  return dark ? 'dark' : 'light';
 }

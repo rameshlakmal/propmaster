@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS _propmaster.state (
   step_id     bigint REFERENCES _propmaster.steps (id) ON DELETE SET NULL
 );
 INSERT INTO _propmaster.state DEFAULT VALUES ON CONFLICT DO NOTHING;
+-- While paused, a session stays open but nothing is recorded (setup the tester doesn't want in the test).
+ALTER TABLE _propmaster.state ADD COLUMN IF NOT EXISTS paused boolean NOT NULL DEFAULT false;
+
+-- Things the tester marks during a session: pauses, resumes, and flags ("this looks wrong") with a note.
+CREATE TABLE IF NOT EXISTS _propmaster.markers (
+  id          bigserial PRIMARY KEY,
+  session_id  bigint NOT NULL REFERENCES _propmaster.sessions (id) ON DELETE CASCADE,
+  step_id     bigint NOT NULL REFERENCES _propmaster.steps (id) ON DELETE CASCADE,
+  kind        text NOT NULL CHECK (kind IN ('pause', 'resume', 'flag')),
+  note        text,
+  created_at  timestamptz NOT NULL DEFAULT clock_timestamp()
+);
 
 -- Busy or irrelevant tables (sessions, logs, queues) that should never get triggers.
 CREATE TABLE IF NOT EXISTS _propmaster.excluded_tables (
@@ -89,7 +101,7 @@ DECLARE
 BEGIN
   -- Idle check stays outside the exception block: no subtransaction cost when not recording.
   SELECT * INTO v_state FROM _propmaster.state;
-  IF v_state.session_id IS NULL THEN
+  IF v_state.session_id IS NULL OR v_state.paused THEN
     RETURN NULL;
   END IF;
 
@@ -139,7 +151,7 @@ DECLARE
   v_state  _propmaster.state;
 BEGIN
   SELECT * INTO v_state FROM _propmaster.state;
-  IF v_state.session_id IS NULL THEN
+  IF v_state.session_id IS NULL OR v_state.paused THEN
     RETURN NULL;
   END IF;
 
@@ -310,7 +322,7 @@ BEGIN
   VALUES (v_session, 0, '(before first step)')
   RETURNING id INTO v_step;
 
-  UPDATE _propmaster.state SET session_id = v_session, step_id = v_step;
+  UPDATE _propmaster.state SET session_id = v_session, step_id = v_step, paused = false;
   RETURN v_session;
 END $$;
 
@@ -352,9 +364,44 @@ BEGIN
   END IF;
 
   UPDATE _propmaster.sessions SET stopped_at = clock_timestamp() WHERE id = v_state.session_id;
-  UPDATE _propmaster.state SET session_id = NULL, step_id = NULL;
+  UPDATE _propmaster.state SET session_id = NULL, step_id = NULL, paused = false;
   PERFORM _propmaster.set_triggers_enabled(false);
   RETURN v_state.session_id;
+END $$;
+
+
+-- Pauses or resumes the running session; the marker goes on the current step.
+CREATE OR REPLACE FUNCTION _propmaster.set_paused(p_paused boolean) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_state  _propmaster.state;
+BEGIN
+  SELECT * INTO v_state FROM _propmaster.state FOR UPDATE;
+  IF v_state.session_id IS NULL THEN
+    RAISE EXCEPTION 'nothing is recording';
+  END IF;
+  IF v_state.paused = p_paused THEN
+    RAISE EXCEPTION 'the recording is already %', CASE WHEN p_paused THEN 'paused' ELSE 'running' END;
+  END IF;
+
+  UPDATE _propmaster.state SET paused = p_paused;
+  INSERT INTO _propmaster.markers (session_id, step_id, kind)
+  VALUES (v_state.session_id, v_state.step_id, CASE WHEN p_paused THEN 'pause' ELSE 'resume' END);
+END $$;
+
+
+-- Flags the current step ("this looks wrong"), with an optional note.
+CREATE OR REPLACE FUNCTION _propmaster.flag(p_note text) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_state  _propmaster.state;
+BEGIN
+  SELECT * INTO v_state FROM _propmaster.state;
+  IF v_state.session_id IS NULL THEN
+    RAISE EXCEPTION 'nothing is recording';
+  END IF;
+  INSERT INTO _propmaster.markers (session_id, step_id, kind, note)
+  VALUES (v_state.session_id, v_state.step_id, 'flag', nullif(trim(p_note), ''));
 END $$;
 
 

@@ -99,6 +99,13 @@ const routes: [string, RegExp, Handler][] = [
     const { name } = await req.body();
     return withActive(async (db, identity) => ({ seq: await sessions.step(db, identity, str(name, 'name')) }));
   }],
+  ['POST', /^\/api\/record\/pause$/, () => withActive(async (db, identity) => { await sessions.pause(db, identity); return { ok: true }; })],
+  ['POST', /^\/api\/record\/resume$/, () => withActive(async (db, identity) => { await sessions.resume(db, identity); return { ok: true }; })],
+  ['POST', /^\/api\/record\/flag$/, async (req) => {
+    const { note } = await req.body();
+    if (note !== undefined && typeof note !== 'string') throw new UserError('"note" must be text.');
+    return withActive(async (db, identity) => { await sessions.flag(db, identity, note ?? ''); return { ok: true }; });
+  }],
   ['POST', /^\/api\/record\/stop$/, () => withActive(async (db, identity) => toView(await sessions.stop(db, identity)))],
 
   ['GET', /^\/api\/sessions$/, () => withActive((db, identity) => sessions.list(db, identity))],

@@ -126,6 +126,13 @@ function ActiveDatabase({ status, onChanged }: { status: Status; onChanged: () =
       {status.installed ? (
         <Flex direction="column" gap="3">
           <Flex align="center" gap="2"><CheckCircle size={18} weight="fill" color="var(--grass-9)" /><Text size="2">Recorder installed, watching {status.watchedTables} tables.</Text></Flex>
+          {status.outdated && (
+            <Flex align="center" gap="3" wrap="wrap">
+              <Warning size={18} weight="fill" color="var(--amber-9)" />
+              <Text size="2">This recorder is from an older version: pause, resume and flag need the upgrade. Recordings are kept.</Text>
+              <Button size="2" onClick={() => void act('install', () => api('POST', '/install'))} loading={busy === 'install'} className="press">Upgrade recorder</Button>
+            </Flex>
+          )}
           <Box>
             <Text as="p" size="2" weight="medium" mb="2">Not watched</Text>
             {status.excludedTables.length === 0 && <Text as="p" size="2" color="gray" mb="2">No tables excluded. Exclude busy tables (sessions, logs) that change on every page view.</Text>}

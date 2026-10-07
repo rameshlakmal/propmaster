@@ -16,6 +16,12 @@ export interface ChangeView {
   changedAt: string;
 }
 
+export interface MarkerView {
+  kind: 'pause' | 'resume' | 'flag';
+  note: string | null;
+  at: string;
+}
+
 export interface RecordingView {
   id: string;
   mode: string;
@@ -25,7 +31,7 @@ export interface RecordingView {
   stoppedAt: string | null;
   notes: string[];
   summary: { changes: number; tables: number; byOp: Record<string, number> };
-  steps: { seq: number; name: string; startedAt: string; changes: ChangeView[] }[];
+  steps: { seq: number; name: string; startedAt: string; changes: ChangeView[]; markers: MarkerView[] }[];
 }
 
 export function toView(rec: Recording): RecordingView {
@@ -43,6 +49,7 @@ export function toView(rec: Recording): RecordingView {
       seq: step.seq,
       name: step.name,
       startedAt: step.startedAt.toISOString(),
+      markers: (step.markers ?? []).map((m) => ({ kind: m.kind, note: m.note, at: m.at.toISOString() })),
       changes: step.changes.map((c) => ({
         id: c.id,
         op: c.op,

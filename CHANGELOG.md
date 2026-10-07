@@ -7,6 +7,10 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 ### Added
 
 - **Web app** (`propmaster ui`): set up connections with a live access check, install the recorder, record with a Start button and one step per Enter, watch changes appear live, browse and search sessions, open any change for its before and after values, export, and edit and run rules. Light and dark mode. Runs on 127.0.0.1 only, with a secret token per run, a Host-header check (DNS rebinding) and an Origin check. Saved connections live in `~/.propmaster/ui.json`.
+- **Floating recorder window** (web app, Chrome and Edge): **Pop out** opens a small always-on-top window with the current step, a step field (Enter adds the step), Pause/Resume, Flag with a note, Stop, and a live feed of the latest changes. It keeps working while the Propmaster tab is in the background.
+- **Pause and resume** (`record pause`, `record resume`, and buttons in the web app): the session stays open but nothing is recorded, for setup that isn't part of the test. In snapshot mode, pausing compares the step so far, and resuming takes a fresh snapshot.
+- **Flags** (`record flag [note]`, and a Flag button): mark the current step as "looks wrong", with an optional note. Pauses, resumes and flags show in the timeline, the HTML and Markdown exports, and the web app.
+- `record status` and the web app say when the recorder in a database is from an older version, and the Setup page has an **Upgrade recorder** button (`propmaster install` upgrades too; recordings are kept).
 
 ### Changed
 

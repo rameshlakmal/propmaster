@@ -35,6 +35,7 @@ So most tests target those two risks. Features such as filters and exports come 
 | R17 | Rules miss a real business-logic bug after a requirement change | Med · High | The demo encodes a requirement change with a planted bug | `a requirement change, checked with rules` suite: old build flagged, buggy v2 caught, correct build passes |
 | R18 | Another program or website drives the web app (it can reach your test databases) | Low · **High** | Listens on 127.0.0.1 only; a secret token per run, accepted in a header only; Host-header check against DNS rebinding; Origin check against cross-site requests; passwords never sent to the browser | `test/ui-server.integration.test.ts`: security suite |
 | R19 | The web app shows something different from what was recorded | Low · High | Values are formatted on the server with the same code as the CLI (exact numbers) | `records steps, shows them live, and stops` (exact `84.50`); browser walkthrough |
+| R20 | Pausing loses or leaks changes: setup done while paused shows in the test, or changes before the pause disappear | Med · High | Trigger mode skips capture while the state row says paused; snapshot mode compares at the pause and takes a fresh baseline on resume; a new session always starts unpaused | `test/pause.integration.test.ts`: both modes, steps while paused, stopping while paused, errors for pausing twice; CLI e2e; browser walkthrough |
 
 ## 3. Test levels
 
@@ -44,7 +45,7 @@ So most tests target those two risks. Features such as filters and exports come 
 | Integration | `test/*.integration.test.ts` | Trigger mode, snapshot mode, doctor, SQL checks and rule checks against **real PostgreSQL** | Docker locally; GitHub Actions service container in CI |
 | End to end | `test/cli.e2e.test.ts` | The CLI as a separate process: full flows, exit codes, error messages | Same as integration |
 | Web app | `test/ui-server.integration.test.ts` | The web app's API: security, connections, a full recording, exports, rules | Same as integration |
-| Web app, in a browser | Manual walkthrough before a release (section 6) | Start, steps, live timeline, stop, sessions, search, rules, setup, light/dark, phone width, console errors | Headless Edge or Chrome |
+| Web app, in a browser | Manual walkthrough before a release (section 6) | Start, steps, live timeline, pause, flag, the floating window, stop, sessions, search, rules, setup, light/dark, phone width, console errors | Headless Edge or Chrome |
 | Compatibility | `.github/workflows/ci.yml` | PostgreSQL 13, 14, 15, 16, 17; Node 22.12 and 24 | GitHub Actions |
 | Performance | `scripts/bench.ts` | Overhead with no recorder, installed but idle, and recording | Manually before a release |
 | Exploratory | Section 6 | The HTML report in real browsers, the CLI on Windows, macOS and Linux | Manually before a release |
@@ -87,6 +88,8 @@ Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
 - ✅ The Markdown export renders as tables on GitHub (checked with GitHub's Markdown renderer).
 - ⬜ The Markdown export pasted into a Jira ticket.
 - ✅ Web app walkthrough in headless Edge, driven like a tester (22 checks): start a recording from the form, add steps with Enter, see a real EverShop change appear live, stop, open the session, expand a change, search, run rules, run the access check, light and dark mode, phone width, and no console errors from the app.
+- ✅ Floating window walkthrough in headless Edge (24 checks): upgrade an older recorder from Setup, pause, resume and flag on the page, pop out, add a step from the floating window (the page follows), see a real order arrive in its live feed, pause there (setup while paused is not recorded), resume, flag with a note, stop (the page shows the stopped view with the markers), close, and no console errors.
+- ⬜ Floating window in a real (not headless) Chrome: it stays on top of another application's window.
 
 ## 7. Known limitations (by design in v0.1)
 

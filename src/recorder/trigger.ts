@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import type { Db } from '../core/db.js';
 import { UserError } from '../core/errors.js';
 import { loadColumns } from './catalog.js';
-import { orderColumns, tableKey, type Change, type Recording, type SessionSummary, type Step } from './types.js';
+import { orderColumns, tableKey, type Change, type Marker, type Recording, type SessionSummary, type Step } from './types.js';
 
 const INSTALL_SQL = new URL('../../sql/recorder.sql', import.meta.url);
 
@@ -13,10 +13,13 @@ export interface ActiveSession {
   startedAt: Date;
   stepSeq: number;
   stepName: string;
+  paused: boolean;
 }
 
 export interface TriggerStatus {
   installed: boolean;
+  /** Installed by an older version, without pause, resume and flag: installing again upgrades it. */
+  outdated: boolean;
   watchedTables: number;
   excludedTables: string[];
   active: ActiveSession | null;
@@ -68,6 +71,30 @@ export async function step(db: Db, name: string): Promise<number> {
   return rows[0]!.seq;
 }
 
+/** Pause, resume and flag arrived after the first release: an older install needs `propmaster install` again. */
+async function requireMarkers(db: Db): Promise<void> {
+  await requireInstalled(db);
+  const { rows } = await db.query<{ ok: boolean }>("SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL AS ok");
+  if (!rows[0]!.ok) {
+    throw new UserError('The recorder in this database is from an older version.', 'Upgrade it (recordings are kept): `propmaster install`, or Upgrade recorder on the Setup page.');
+  }
+}
+
+export async function pause(db: Db): Promise<void> {
+  await requireMarkers(db);
+  await db.query('SELECT _propmaster.set_paused(true)');
+}
+
+export async function resume(db: Db): Promise<void> {
+  await requireMarkers(db);
+  await db.query('SELECT _propmaster.set_paused(false)');
+}
+
+export async function flag(db: Db, note: string): Promise<void> {
+  await requireMarkers(db);
+  await db.query('SELECT _propmaster.flag($1)', [note]);
+}
+
 export async function stop(db: Db): Promise<string> {
   await requireInstalled(db);
   const { rows } = await db.query<{ id: string }>('SELECT _propmaster.stop()::text AS id');
@@ -75,19 +102,23 @@ export async function stop(db: Db): Promise<string> {
 }
 
 export async function status(db: Db): Promise<TriggerStatus> {
-  if (!(await isInstalled(db))) return { installed: false, watchedTables: 0, excludedTables: [], active: null };
+  if (!(await isInstalled(db))) return { installed: false, outdated: false, watchedTables: 0, excludedTables: [], active: null };
 
   const { rows: [counts] } = await db.query<{ n: number }>('SELECT _propmaster.watched_table_count() AS n');
   const { rows: excluded } = await db.query<{ name: string }>(
     "SELECT format('%s.%s', table_schema, table_name) AS name FROM _propmaster.excluded_tables ORDER BY 1");
   const { rows: [active] } = await db.query<ActiveSession>(`
-    SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", st.seq AS "stepSeq", st.name AS "stepName"
+    SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", st.seq AS "stepSeq", st.name AS "stepName",
+           coalesce((to_jsonb(x) ->> 'paused')::boolean, false) AS paused  -- works before an upgrade adds the column
       FROM _propmaster.state x
       JOIN _propmaster.sessions s ON s.id = x.session_id
       JOIN _propmaster.steps st ON st.id = x.step_id`);
 
+  const { rows: [current] } = await db.query<{ ok: boolean }>("SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL AS ok");
+
   return {
     installed: true,
+    outdated: !current!.ok,
     watchedTables: counts!.n,
     excludedTables: excluded.map((r) => r.name),
     active: active ?? null,
@@ -161,6 +192,15 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
      WHERE session_id = $1
      ORDER BY id`, [session.id]);
 
+  const hasMarkers = (await db.query<{ ok: boolean }>("SELECT to_regclass('_propmaster.markers') IS NOT NULL AS ok")).rows[0]!.ok;
+  const { rows: markers } = hasMarkers
+    ? await db.query<Marker & { stepId: string }>(`
+        SELECT step_id::text AS "stepId", kind, note, created_at AS at
+          FROM _propmaster.markers
+         WHERE session_id = $1
+         ORDER BY id`, [session.id])
+    : { rows: [] };
+
   const tables = [...new Set(changes.map((c) => tableKey(c.tableSchema, c.tableName)))];
 
   return orderColumns({
@@ -169,6 +209,7 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
     steps: steps.map(({ id, ...s }) => ({
       ...s,
       changes: changes.filter((c) => c.stepId === id).map(({ stepId: _, ...c }) => c),
+      markers: markers.filter((m) => m.stepId === id).map(({ stepId: _, ...m }) => m),
     })),
     columns: await loadColumns(db, tables),
     notes: [],

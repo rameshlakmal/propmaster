@@ -128,6 +128,18 @@ describe('recording through the web app', () => {
     const total = step.changes[1].columns.find((c: { column: string }) => c.column === 'total');
     expect(total).toEqual({ column: 'total', before: null, after: '84.50', changed: false }); // exact value, formatted on the server
 
+    // Pause, flag and resume: the markers come back with the step, and paused shows in status.
+    expect((await call('POST', '/api/record/pause')).data).toEqual({ ok: true });
+    expect((await call('GET', '/api/status')).data.active.paused).toBe(true);
+    expect((await call('POST', '/api/record/pause')).data.error.message).toBe('The recording is already paused.');
+    expect((await call('POST', '/api/record/resume')).data).toEqual({ ok: true });
+    expect((await call('POST', '/api/record/flag', { note: 'total looks right' })).data).toEqual({ ok: true });
+    expect((await call('POST', '/api/record/flag', { note: 5 })).status).toBe(400);
+    const marked = (await call('GET', `/api/sessions/${id}`)).data.steps.find((s: { seq: number }) => s.seq === 1);
+    expect(marked.markers.map((m: { kind: string; note: string | null }) => [m.kind, m.note])).toEqual([
+      ['pause', null], ['resume', null], ['flag', 'total looks right'],
+    ]);
+
     const stopped = (await call('POST', '/api/record/stop')).data;
     expect(stopped.stoppedAt).not.toBeNull();
     expect(stopped.summary).toMatchObject({ changes: 4, tables: 4 });

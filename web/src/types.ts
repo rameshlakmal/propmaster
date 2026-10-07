@@ -35,11 +35,13 @@ export interface ActiveSession {
   startedAt: string;
   stepSeq: number;
   stepName: string;
+  paused: boolean;
 }
 
 export interface Status {
   profile: Profile;
   installed: boolean;
+  outdated: boolean;
   watchedTables: number;
   excludedTables: string[];
   active: ActiveSession | null;
@@ -77,6 +79,13 @@ export interface Step {
   name: string;
   startedAt: string;
   changes: Change[];
+  markers: Marker[];
+}
+
+export interface Marker {
+  kind: 'pause' | 'resume' | 'flag';
+  note: string | null;
+  at: string;
 }
 
 export interface Recording {
