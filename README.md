@@ -62,7 +62,30 @@ $ propmaster record stop
 docker compose run --rm demo   # starts Postgres with the demo shop, then records, reports and checks rules
 ```
 
-**To use it,** with Node 22.12+ and Docker:
+### The web app (recommended)
+
+With Node 22.12+:
+
+```sh
+npm install
+npm run build
+npm run ui           # opens Propmaster in your browser
+```
+
+1. **Setup:** paste your test database's connection string, press **Test** to see what your DB user can do, and save it. Install the recorder with one click.
+2. **Record:** name the test case and press **Start recording**. Before each action in the app you're testing, type what you're about to do and press Enter. The changes appear live under that step.
+3. **Sessions:** open any recording to search it, filter by table or operation, click a change for its before and after values, and export it (HTML, Markdown, SQL checks).
+4. **Rules:** open your rules file, edit it, and run it against a session.
+
+![Recording live in the web app](docs/images/web-app-recording.png)
+
+![A recorded session, with one change opened](docs/images/web-app-session.png)
+
+The web app runs on your own machine only: it listens on `127.0.0.1`, every request needs the secret token in the link it opens, and requests from other websites are refused. Saved connections live in `~/.propmaster/ui.json`.
+
+### The command line
+
+Everything the web app does is also a command, which suits CI and scripts:
 
 ```sh
 npm install
@@ -100,6 +123,7 @@ Not sure what your DB user is allowed to do? Run `propmaster doctor`.
 
 | Command | What it does |
 | --- | --- |
+| `ui` | Opens the web app in your browser (`--port`, `--no-open`). |
 | `doctor` | Checks what your DB user can do, recommends a mode, and lists the GRANTs to ask a DBA for. |
 | `install` / `uninstall` | Adds or removes the recorder (`uninstall` asks you to type `uninstall`, or pass `--yes`). Re-running `install` upgrades in place. |
 | `record start [name]` | Starts a session. `--snapshot` for snapshot mode, with `--exclude` and `--max-rows`. |

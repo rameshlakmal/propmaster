@@ -16,11 +16,12 @@ import { filterRecording, hasFilters, parseOps, parseTime, type Filters } from '
 import { createMasker, maskRecording } from './recorder/mask.js';
 import { checkRules, parseRules } from './recorder/rules.js';
 import { formatRuleResults, tally } from './recorder/rules-report.js';
-import * as snapshot from './recorder/snapshot.js';
+import * as sessions from './recorder/sessions.js';
+import { DEFAULT_MAX_ROWS } from './recorder/snapshot.js';
 import { formatTimeline } from './recorder/timeline.js';
 import * as trigger from './recorder/trigger.js';
 import { formatDateTime } from './recorder/format.js';
-import type { Recording, SessionSummary } from './recorder/types.js';
+import type { Recording } from './recorder/types.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -110,35 +111,9 @@ function toFilters(o: FilterOpts): Filters {
   };
 }
 
-// ---------- mode routing ----------
+// ---------- sessions (shared with the web app) ----------
 
-/** The snapshot session recording this database, if any. Otherwise commands go to trigger mode. */
-async function activeSnapshotFor(identity: string) {
-  const active = await snapshot.activeSnapshot();
-  return active && active.identity === identity ? active : null;
-}
-
-async function loadRecording(ctx: Context, id?: string): Promise<Recording> {
-  let rec: Recording | null;
-  if (id !== undefined) {
-    const clean = id.replace(/^#/, '');
-    if (/^s\d+$/.test(clean)) rec = await snapshot.getSnapshotRecording(clean);
-    else if (/^\d+$/.test(clean)) rec = await trigger.getRecording(ctx.db, clean);
-    else throw new UserError(`"${id}" is not a session id.`, 'Session ids look like 12 (trigger mode) or s3 (snapshot mode). See `propmaster record list`.');
-    if (!rec) throw new UserError(`There is no session ${id}.`, 'See `propmaster record list`.');
-    return rec;
-  }
-
-  const latest = (await allSessions(ctx))[0];
-  if (!latest) throw new UserError('No sessions recorded yet.', 'Start one with `propmaster record start "My test"`.');
-  return loadRecording(ctx, latest.id);
-}
-
-async function allSessions(ctx: Context): Promise<SessionSummary[]> {
-  const fromDb = (await trigger.isInstalled(ctx.db)) ? await trigger.listSessions(ctx.db) : [];
-  const local = await snapshot.listSnapshots(ctx.identity);
-  return [...fromDb, ...local].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
-}
+const loadRecording = (ctx: Context, id?: string): Promise<Recording> => sessions.load(ctx.db, ctx.identity, id);
 
 function printTimeline(rec: Recording, o: FilterOpts & { mask?: boolean; maskColumns?: string[] }): void {
   const { rec: shown, hidden } = filterRecording(rec, toFilters(o));
@@ -203,25 +178,14 @@ record
   .description('Start recording')
   .option('--snapshot', 'compare snapshots instead of using triggers (needs only read access)')
   .option('--exclude <tables>', 'snapshot mode: tables to leave out (comma-separated, patterns allowed)', list)
-  .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(snapshot.DEFAULT_MAX_ROWS).argParser(Number))
+  .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(DEFAULT_MAX_ROWS).argParser(Number))
   .action(run(async (ctx, name: string, opts: { snapshot?: boolean; exclude?: string[]; maxRows: number }) => {
     const next = [hint(c, 'before each test step: propmaster record step "<name>"'), hint(c, 'when you are done:    propmaster record stop')];
     const recording = (id: string, detail: string) => spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${id}`)} · ${name}`, c.dim(detail), ui.width);
-    const active = await activeSnapshotFor(ctx.identity);
-    if (active) throw new UserError(`Snapshot session ${active.id} is already recording.`, 'Stop it first: `propmaster record stop`.');
-
-    if (opts.snapshot) {
-      const s = await snapshot.startSnapshot(ctx.db, ctx.identity, name, { exclude: opts.exclude, maxRows: opts.maxRows });
-      say(recording(s.id, `snapshot mode · ${s.tables} tables read`));
-      if (s.skipped.length) say(`   ${c.yellow(`! not watched (over ${opts.maxRows} rows): ${s.skipped.join(', ')}`)}`);
-      say(...next);
-      return;
-    }
-
-    if (opts.exclude) throw new UserError('--exclude is for snapshot mode.', 'In trigger mode use `propmaster record exclude <table>`.');
-    const id = await trigger.start(ctx.db, name);
-    const { watchedTables } = await trigger.status(ctx.db);
-    say(recording(id, `${watchedTables} tables watched`), ...next);
+    const s = await sessions.start(ctx.db, ctx.identity, name, { snapshot: opts.snapshot, exclude: opts.exclude, maxRows: opts.maxRows });
+    say(recording(s.id, s.mode === 'snapshot' ? `snapshot mode · ${s.tables} tables read` : `${s.tables} tables watched`));
+    if (s.skipped.length) say(`   ${c.yellow(`! not watched (over ${opts.maxRows} rows): ${s.skipped.join(', ')}`)}`);
+    say(...next);
   }));
 
 record
@@ -229,9 +193,7 @@ record
   .argument('<name>', 'what the tester is about to do, e.g. "Click Place Order"')
   .description('Start a new test step')
   .action(run(async (ctx, name: string) => {
-    const seq = (await activeSnapshotFor(ctx.identity))
-      ? await snapshot.stepSnapshot(ctx.db, ctx.identity, name)
-      : await trigger.step(ctx.db, name);
+    const seq = await sessions.step(ctx.db, ctx.identity, name);
     say(spread(` ${c.cyan(c.bold(`STEP ${seq}`))}  ${c.bold(name)}`, c.dim('recording'), ui.width));
   }));
 
@@ -240,28 +202,22 @@ addFilterOptions(record
   .description('Stop recording and show the timeline')
   .option('--mask', 'hide sensitive values in the timeline'))
   .action(run(async (ctx, opts: FilterOpts & { mask?: boolean }) => {
-    const rec = (await activeSnapshotFor(ctx.identity))
-      ? await snapshot.stopSnapshot(ctx.db, ctx.identity)
-      : await trigger.getRecording(ctx.db, await trigger.stop(ctx.db));
-    say(` ${i.stop} Stopped session #${rec!.id}`, '');
-    printTimeline(rec!, opts);
+    const rec = await sessions.stop(ctx.db, ctx.identity);
+    say(` ${i.stop} Stopped session #${rec.id}`, '');
+    printTimeline(rec, opts);
   }));
 
 record
   .command('status')
   .description('Show whether a recording is running')
   .action(run(async (ctx) => {
-    const snap = await activeSnapshotFor(ctx.identity);
-    if (snap) {
-      say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${snap.id}`)} · ${snap.name}`, c.dim('snapshot mode'), ui.width),
-        `   ${c.dim('current step')} ${c.cyan(`STEP ${snap.stepSeq}`)} ${snap.stepName}`);
-      return;
-    }
-    const s = await trigger.status(ctx.db);
-    if (!s.installed) say(` ${i.idle} Not recording. The recorder is not installed.`, hint(c, 'propmaster install, or propmaster record start --snapshot'));
-    else if (!s.active) say(` ${i.idle} Not recording ${c.dim(`· ${s.watchedTables} tables watched`)}`);
-    else say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(`${s.watchedTables} tables watched`), ui.width),
-      `   ${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`);
+    const s = await sessions.status(ctx.db, ctx.identity);
+    if (s.active) {
+      const detail = s.active.mode === 'snapshot' ? 'snapshot mode' : `${s.watchedTables} tables watched`;
+      say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(detail), ui.width),
+        `   ${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`);
+    } else if (!s.installed) say(` ${i.idle} Not recording. The recorder is not installed.`, hint(c, 'propmaster install, or propmaster record start --snapshot'));
+    else say(` ${i.idle} Not recording ${c.dim(`· ${s.watchedTables} tables watched`)}`);
     if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);
   }));
 
@@ -279,14 +235,14 @@ record
   .command('list')
   .description('List recent sessions')
   .action(run(async (ctx) => {
-    const sessions = await allSessions(ctx);
-    if (sessions.length === 0) {
+    const all = await sessions.list(ctx.db, ctx.identity);
+    if (all.length === 0) {
       say(` ${i.idle} No sessions recorded yet.`, hint(c, 'propmaster record start "My test"'));
       return;
     }
     say(...boxTable(ui, [
       { header: 'Session' }, { header: 'Started' }, { header: 'Name', flex: true }, { header: 'Changes' }, { header: 'Mode' },
-    ], sessions.map((s) => [
+    ], all.map((s) => [
       cell(`#${s.id}`, (t) => c.bold(t)),
       cell(formatDateTime(s.startedAt).slice(0, 16)),
       cell(s.name),
@@ -380,8 +336,7 @@ record
   .description('Delete a stopped session and its changes')
   .action(run(async (ctx, session: string) => {
     const id = session.replace(/^#/, '');
-    if (/^s\d+$/.test(id)) await snapshot.deleteSnapshot(id);
-    else await trigger.deleteSession(ctx.db, id);
+    await sessions.remove(ctx.db, id);
     say(` ${i.ok} Deleted session #${id}`);
   }));
 
@@ -411,6 +366,22 @@ record
     for (const t of tables) await trigger.includeTable(db, t);
     say(` ${i.ok} Watching again ${c.bold(tables.join(', '))}`);
   }));
+
+program
+  .command('ui')
+  .description('Open the Propmaster web app in your browser')
+  .addOption(new Option('--port <n>', 'port to listen on (127.0.0.1 only)').default(4400).argParser(Number))
+  .option('--no-open', 'do not open the browser')
+  .action(async (opts: { port: number; open: boolean }) => {
+    const { startUiServer } = await import('./ui/server.js');
+    const app = await startUiServer(opts.port).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') throw new UserError(`Port ${opts.port} is already in use.`, `Is the web app already running? Or pick another port: propmaster ui --port ${opts.port + 1}`);
+      throw err;
+    });
+    say(` ${brand(c)}  ${c.bold('Web app running')}`, '', `   ${c.cyan(app.url)}`, '',
+      hint(c, 'this link includes a secret token: keep it to yourself'), hint(c, 'press Ctrl+C to stop'));
+    if (opts.open) openFile(app.url);
+  });
 
 program.parseAsync().catch((err: unknown) => {
   const e = explainError(err);

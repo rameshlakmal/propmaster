@@ -4,6 +4,10 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- **Web app** (`propmaster ui`): set up connections with a live access check, install the recorder, record with a Start button and one step per Enter, watch changes appear live, browse and search sessions, open any change for its before and after values, export, and edit and run rules. Light and dark mode. Runs on 127.0.0.1 only, with a secret token per run, a Host-header check (DNS rebinding) and an Origin check. Saved connections live in `~/.propmaster/ui.json`.
+
 ### Changed
 
 - **Restyled terminal output** across the CLI: a PROPMASTER header, `STEP n` sections with counts on the right, and **bordered tables**: one per step for the timeline (Op, Table, Row, Changes; the same column widths for every step), one for rule results plus a table of the breaking rows under each failure, and one for `record list`. Long text wraps between words inside its cell, values too long for a cell are shortened with `…`, and everything fits the terminal width. Messages are consistent, with a `→` next step.
@@ -11,6 +15,7 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A broken settings file is reported instead of being treated as empty (saving would have erased the saved connections).
 - Colour codes are no longer written when output is piped to a file (picocolors enables colour on every Windows process).
 - Piping into a program that stops reading early (`| head`) no longer prints an EPIPE stack trace.
 

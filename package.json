@@ -13,9 +13,9 @@
     "sql"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && vite build --config web/vite.config.ts",
     "propmaster": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "test": "vitest run",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
@@ -23,21 +23,33 @@
     "bench": "tsx scripts/bench.ts",
     "demo": "tsx scripts/demo.ts",
     "shop": "tsx demo/shop.ts",
-    "gif": "tsx scripts/gif.ts"
+    "gif": "tsx scripts/gif.ts",
+    "web:dev": "vite --config web/vite.config.ts",
+    "ui": "tsx src/cli.ts ui"
   },
   "engines": {
     "node": ">=22.12"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@radix-ui/themes": "^3.3.0",
     "commander": "^15.0.0",
     "pg": "^8.23.1",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
+    "vite": "^8.3.3",
     "vitest": "^5.0.3"
   },
   "repository": {
