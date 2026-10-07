@@ -6,3 +6,5 @@ dist/
 demo-report.*
 demo-checks.sql
 propmaster-session-*
+demo/gif/*.mp4
+demo/gif/palette.png

@@ -23,6 +23,7 @@ try {
   await trigger.install(db);
   const { active, watchedTables } = await trigger.status(db);
   if (active) await trigger.stop(db); // a leftover session from an earlier run
+  await db.query('UPDATE inventory SET stock = 20 WHERE stock < 20'); // earlier runs may have sold out (not recorded)
   console.log(`Watching ${watchedTables} tables.`);
 
   say('A tester checks out, then cancels the order');
@@ -72,7 +73,9 @@ try {
     console.log(formatRuleResults(results));
     console.log(pc.dim('\nThe discount was applied to the order, but the payment still charges the full price.'));
   } finally {
-    await db.query(original!.def); // back to build v1, so the demo can run again
+    // Leave the shop as we found it, so the demo can run again: build v1, and the stock act 2 sold.
+    await db.query(original!.def);
+    await db.query('UPDATE inventory SET stock = stock + 2 WHERE product_id = 3');
   }
 } finally {
   await db.end();

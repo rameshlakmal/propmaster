@@ -1,5 +1,6 @@
 # The README demo: npm run gif (needs npm run db:up and npm run build first)
-Output demo/gif/propmaster-demo.gif
+# An MP4 streams to disk; scripts/gif.ts turns it into the GIF (VHS's own GIF output holds every frame in memory).
+Output demo/gif/propmaster-demo.mp4
 
 Set Shell bash
 Set FontSize 15
@@ -12,7 +13,7 @@ Set CursorBlink false
 
 Hide
 Type "export PROPMASTER_DATABASE_URL=postgres://propmaster:propmaster@postgres:5432/qa_shop PS1='$ '; alias propmaster='node /app/dist/cli.js'; alias shop='node --no-warnings /app/demo/shop.ts'; cd /app" Enter
-Type "propmaster install >/dev/null; propmaster record stop >/dev/null 2>&1; clear" Enter
+Type "propmaster install >/dev/null; propmaster record stop >/dev/null 2>&1; shop restock >/dev/null; clear" Enter
 Wait@30s /^\$ ?$/
 Sleep 2s
 Show

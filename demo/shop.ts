@@ -2,6 +2,7 @@
 //   npm run shop -- signup "Dina QA" dina@example.com
 //   npm run shop -- order <customer> <product> <qty>
 //   npm run shop -- cancel <order|last>
+//   npm run shop -- restock            (tops every product up to at least 20 in stock)
 import pg from 'pg';
 
 const url = process.env.PROPMASTER_DATABASE_URL ?? 'postgres://propmaster:propmaster@localhost:5433/qa_shop';
@@ -36,10 +37,19 @@ try {
       console.log(`Order ${order} cancelled.`);
       break;
     }
+    case 'restock': {
+      const { rowCount } = await db.query('UPDATE inventory SET stock = 20 WHERE stock < 20');
+      console.log(`Restocked ${rowCount} product${rowCount === 1 ? '' : 's'}.`);
+      break;
+    }
     default:
-      console.log('Usage: shop signup <name> <email> | order <customer> <product> <qty> | cancel <order|last>');
+      console.log('Usage: shop signup <name> <email> | order <customer> <product> <qty> | cancel <order|last> | restock');
       process.exitCode = 1;
   }
+} catch (err) {
+  // What a real shop would show: a short message, not a stack trace.
+  console.error(`Sorry, that didn't work: ${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
 } finally {
   await db.end();
 }
