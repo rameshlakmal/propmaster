@@ -27,6 +27,8 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- The Rules page showed a blank screen after the session list became paged (it still expected the old list). It now reads the paged list, and a page that crashes shows the error and a Reload button instead of a blank screen.
+- The Rules page accepts a file path pasted with quotes (Windows' "Copy as path").
 - The web app's session list only ever showed the newest 20 sessions; older ones were unreachable. It now pages through all of them.
 - A session with steps but no changes showed only "no changes", hiding its steps and flags.
 - Two times within the same second read the same in the web app ("09:58:30 PM → 09:58:30 PM"); they now show the exact time.

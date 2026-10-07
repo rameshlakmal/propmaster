@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorCallout, PageHeader } from '../components/Feedback';
 import { formatWhen, toError, useLoad } from '../hooks';
-import type { ApiError, RuleResult, RulesFile, SessionSummary } from '../types';
+import type { ApiError, RuleResult, RulesFile, SessionPage } from '../types';
 
 const STATUS = {
   pass: { icon: <CheckCircle size={18} weight="fill" color="var(--grass-9)" />, label: 'pass', color: 'grass' },
@@ -104,7 +104,8 @@ function Results({ results, allRows }: { results: RuleResult[]; allRows: boolean
 
 export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
   const file = useLoad(() => api<RulesFile>('GET', '/rules'), [activeProfile]);
-  const sessions = useLoad(() => api<SessionSummary[]>('GET', '/sessions'), [activeProfile]);
+  // The newest 100 sessions are plenty to choose from.
+  const sessions = useLoad(() => api<SessionPage>('GET', '/sessions?pageSize=100').then((p) => p.sessions), [activeProfile]);
   const [path, setPath] = useState('');
   const [content, setContent] = useState('');
   const [dirty, setDirty] = useState(false);

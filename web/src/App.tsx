@@ -2,6 +2,7 @@ import { Box, Button, Callout, Code, Flex, Select, Text } from '@radix-ui/themes
 import { ArrowClockwise, Database, ListChecks, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, STALE_SERVER_EVENT } from './api';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { floatingSupported, useFloatingWindow } from './floating';
 import { useLoad, useRoute, useSystemAppearance } from './hooks';
 import { RecordPage } from './pages/RecordPage';
@@ -122,7 +123,11 @@ export function App() {
       </aside>
 
       <main className="main">
-        <div className="page">{stale && <StaleBanner kind={stale} />}{page}</div>
+        <div className="page">
+          {stale && <StaleBanner kind={stale} />}
+          {/* Keyed by page, so moving to another page clears a crash. */}
+          <ErrorBoundary key={`${route.page}/${'id' in route ? route.id ?? '' : ''}`}>{page}</ErrorBoundary>
+        </div>
       </main>
     </div>
   );
