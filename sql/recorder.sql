@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS _propmaster.state (
 INSERT INTO _propmaster.state DEFAULT VALUES ON CONFLICT DO NOTHING;
 -- While paused, a session stays open but nothing is recorded (setup the tester doesn't want in the test).
 ALTER TABLE _propmaster.state ADD COLUMN IF NOT EXISTS paused boolean NOT NULL DEFAULT false;
+-- Auto steps: the session is split into steps at quiet gaps of this many milliseconds (NULL: steps are typed).
+ALTER TABLE _propmaster.sessions ADD COLUMN IF NOT EXISTS auto_split_ms integer CHECK (auto_split_ms > 0);
 
 -- Things the tester marks during a session: pauses, resumes, and flags ("this looks wrong") with a note.
 CREATE TABLE IF NOT EXISTS _propmaster.markers (

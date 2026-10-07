@@ -1,6 +1,7 @@
 // What the web app receives for a session: values already formatted on the server, so exact numbers
 // (84.50, big bigints) survive and the browser only has to display strings.
 import { summarize } from '../recorder/export/summary.js';
+import { isRawNumber } from '../core/json.js';
 import { columnDiffs, formatKey, formatValue, tableLabel } from '../recorder/format.js';
 import type { Recording } from '../recorder/types.js';
 
@@ -9,11 +10,32 @@ export interface ChangeView {
   op: string;
   table: string;
   key: string | null;
-  /** Before/after per column: inserts have no before, deletes no after, updates list changed columns. */
-  columns: { column: string; before: string | null; after: string | null; changed: boolean }[];
+  /**
+   * Before/after per column: inserts have no before, deletes no after, updates list changed columns.
+   * `before`/`after` are written as in SQL ('text', 84.50, NULL); the kinds tell the browser how to show them.
+   */
+  columns: {
+    column: string; before: string | null; after: string | null; changed: boolean;
+    beforeKind: ValueKind | null; afterKind: ValueKind | null;
+  }[];
   dbUser: string | null;
   appName: string | null;
   changedAt: string;
+}
+
+export type ValueKind = 'null' | 'text' | 'number' | 'boolean' | 'timestamp' | 'date' | 'json';
+
+/** What sort of value this is, so the browser can show text without quotes, times readably, and NULL quietly. */
+export function valueKind(value: unknown): ValueKind {
+  if (value === null || value === undefined) return 'null';
+  if (isRawNumber(value) || typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'string') {
+    if (/^\d{4}-\d\d-\d\d[T ]\d\d:\d\d(:\d\d(\.\d+)?)?([+-]\d\d(:?\d\d)?|Z)?$/.test(value)) return 'timestamp';
+    if (/^\d{4}-\d\d-\d\d$/.test(value)) return 'date';
+    return 'text';
+  }
+  return 'json';
 }
 
 export interface MarkerView {
@@ -31,7 +53,9 @@ export interface RecordingView {
   stoppedAt: string | null;
   notes: string[];
   summary: { changes: number; tables: number; byOp: Record<string, number> };
-  steps: { seq: number; name: string; startedAt: string; changes: ChangeView[]; markers: MarkerView[] }[];
+  /** Auto steps: the quiet gap (ms) that ends a step. */
+  autoSplitMs: number | null;
+  steps: { seq: number; name: string; auto: boolean; startedAt: string; changes: ChangeView[]; markers: MarkerView[] }[];
 }
 
 export function toView(rec: Recording): RecordingView {
@@ -44,10 +68,12 @@ export function toView(rec: Recording): RecordingView {
     startedAt: rec.startedAt.toISOString(),
     stoppedAt: rec.stoppedAt?.toISOString() ?? null,
     notes: rec.notes,
+    autoSplitMs: rec.autoSplitMs ?? null,
     summary: { changes: s.changes, tables: s.tables, byOp: s.byOp },
     steps: rec.steps.map((step) => ({
       seq: step.seq,
       name: step.name,
+      auto: step.auto ?? false,
       startedAt: step.startedAt.toISOString(),
       markers: (step.markers ?? []).map((m) => ({ kind: m.kind, note: m.note, at: m.at.toISOString() })),
       changes: step.changes.map((c) => ({
@@ -60,6 +86,8 @@ export function toView(rec: Recording): RecordingView {
           before: c.op === 'INSERT' ? null : formatValue(d.before),
           after: c.op === 'DELETE' ? null : formatValue(d.after),
           changed: d.changed,
+          beforeKind: c.op === 'INSERT' ? null : valueKind(d.before),
+          afterKind: c.op === 'DELETE' ? null : valueKind(d.after),
         })),
         dbUser: c.dbUser,
         appName: c.appName,

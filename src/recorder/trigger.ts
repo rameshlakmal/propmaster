@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Db } from '../core/db.js';
 import { UserError } from '../core/errors.js';
+import { splitSteps } from './autosteps.js';
 import { loadColumns } from './catalog.js';
 import { orderColumns, tableKey, type Change, type Marker, type Recording, type SessionSummary, type Step } from './types.js';
 
@@ -14,6 +15,8 @@ export interface ActiveSession {
   stepSeq: number;
   stepName: string;
   paused: boolean;
+  /** Auto steps: the quiet gap (ms) that ends a step, or null when steps are typed. */
+  autoSplitMs: number | null;
 }
 
 export interface TriggerStatus {
@@ -59,9 +62,14 @@ async function requireInstalled(db: Db): Promise<void> {
   }
 }
 
-export async function start(db: Db, name: string): Promise<string> {
-  await requireInstalled(db);
+/** Starts a session. With `autoSplitMs`, steps are split at quiet gaps and named automatically. */
+export async function start(db: Db, name: string, autoSplitMs?: number): Promise<string> {
+  if (autoSplitMs !== undefined) await requireCurrent(db);
+  else await requireInstalled(db);
   const { rows } = await db.query<{ id: string }>('SELECT _propmaster.start($1)::text AS id', [name]);
+  if (autoSplitMs !== undefined) {
+    await db.query('UPDATE _propmaster.sessions SET auto_split_ms = $2 WHERE id = $1', [rows[0]!.id, autoSplitMs]);
+  }
   return rows[0]!.id;
 }
 
@@ -71,27 +79,34 @@ export async function step(db: Db, name: string): Promise<number> {
   return rows[0]!.seq;
 }
 
-/** Pause, resume and flag arrived after the first release: an older install needs `propmaster install` again. */
-async function requireMarkers(db: Db): Promise<void> {
+/** True when the recorder has everything this version uses (pause, flags, auto steps). */
+async function isCurrent(db: Db): Promise<boolean> {
+  const { rows } = await db.query<{ ok: boolean }>(`
+    SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL
+       AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '_propmaster.sessions'::regclass AND attname = 'auto_split_ms') AS ok`);
+  return rows[0]!.ok;
+}
+
+/** Pause, flags and auto steps arrived after the first release: an older install needs `propmaster install` again. */
+async function requireCurrent(db: Db): Promise<void> {
   await requireInstalled(db);
-  const { rows } = await db.query<{ ok: boolean }>("SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL AS ok");
-  if (!rows[0]!.ok) {
+  if (!(await isCurrent(db))) {
     throw new UserError('The recorder in this database is from an older version.', 'Upgrade it (recordings are kept): `propmaster install`, or Upgrade recorder on the Setup page.');
   }
 }
 
 export async function pause(db: Db): Promise<void> {
-  await requireMarkers(db);
+  await requireCurrent(db);
   await db.query('SELECT _propmaster.set_paused(true)');
 }
 
 export async function resume(db: Db): Promise<void> {
-  await requireMarkers(db);
+  await requireCurrent(db);
   await db.query('SELECT _propmaster.set_paused(false)');
 }
 
 export async function flag(db: Db, note: string): Promise<void> {
-  await requireMarkers(db);
+  await requireCurrent(db);
   await db.query('SELECT _propmaster.flag($1)', [note]);
 }
 
@@ -109,16 +124,17 @@ export async function status(db: Db): Promise<TriggerStatus> {
     "SELECT format('%s.%s', table_schema, table_name) AS name FROM _propmaster.excluded_tables ORDER BY 1");
   const { rows: [active] } = await db.query<ActiveSession>(`
     SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", st.seq AS "stepSeq", st.name AS "stepName",
-           coalesce((to_jsonb(x) ->> 'paused')::boolean, false) AS paused  -- works before an upgrade adds the column
+           coalesce((to_jsonb(x) ->> 'paused')::boolean, false) AS paused,  -- these work before an upgrade adds the columns
+           (to_jsonb(s) ->> 'auto_split_ms')::int AS "autoSplitMs"
       FROM _propmaster.state x
       JOIN _propmaster.sessions s ON s.id = x.session_id
       JOIN _propmaster.steps st ON st.id = x.step_id`);
 
-  const { rows: [current] } = await db.query<{ ok: boolean }>("SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL AS ok");
+  const current = await isCurrent(db);
 
   return {
     installed: true,
-    outdated: !current!.ok,
+    outdated: !current,
     watchedTables: counts!.n,
     excludedTables: excluded.map((r) => r.name),
     active: active ?? null,
@@ -166,10 +182,11 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
   await requireInstalled(db);
 
   const { rows: [session] } = await db.query<{
-    id: string; name: string; startedAt: Date; stoppedAt: Date | null; startedBy: string; database: string;
+    id: string; name: string; startedAt: Date; stoppedAt: Date | null; startedBy: string; database: string; autoSplitMs: number | null;
   }>(`
     SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", s.stopped_at AS "stoppedAt",
-           s.started_by AS "startedBy", current_database() AS database
+           s.started_by AS "startedBy", current_database() AS database,
+           (to_jsonb(s) ->> 'auto_split_ms')::int AS "autoSplitMs"
       FROM _propmaster.sessions s
      WHERE $1::bigint IS NULL OR s.id = $1::bigint
      ORDER BY s.id DESC
@@ -203,8 +220,10 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
 
   const tables = [...new Set(changes.map((c) => tableKey(c.tableSchema, c.tableName)))];
 
-  return orderColumns({
-    ...session,
+  const { autoSplitMs, ...info } = session;
+  const rec = orderColumns({
+    ...info,
+    ...(autoSplitMs ? { autoSplitMs } : {}),
     mode: 'trigger',
     steps: steps.map(({ id, ...s }) => ({
       ...s,
@@ -214,4 +233,5 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
     columns: await loadColumns(db, tables),
     notes: [],
   });
+  return autoSplitMs ? splitSteps(rec, autoSplitMs) : rec;
 }

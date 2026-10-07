@@ -162,6 +162,9 @@ export function FloatingPanel({ win, onChange, onStopped, onClose }: RecorderCal
   }
 
   const paused = active.paused;
+  const auto = active.autoSplitMs !== null;
+  const lastStep = live.data?.steps[live.data.steps.length - 1];
+  const current = auto && lastStep ? { seq: lastStep.seq, name: lastStep.name } : { seq: active.stepSeq, name: active.stepName };
   return (
     <Flex direction="column" gap="3" p="3" className="floating">
       <Flex align="center" justify="between" gap="2">
@@ -178,8 +181,8 @@ export function FloatingPanel({ win, onChange, onStopped, onClose }: RecorderCal
       </Flex>
 
       <Box className="floating-step">
-        <Text as="p" size="1" color="gray">Now on step {active.stepSeq}</Text>
-        <Text as="p" size="2" weight="medium" truncate>{active.stepName}</Text>
+        <Text as="p" size="1" color="gray">{auto ? `Auto steps · last step ${current.seq}` : `Now on step ${current.seq}`}</Text>
+        <Text as="p" size="2" weight="medium" truncate title={current.name}>{current.name}</Text>
         {paused && <Text as="p" size="1" color="amber" mt="1">Changes are not recorded until you resume.</Text>}
       </Box>
 
@@ -187,7 +190,7 @@ export function FloatingPanel({ win, onChange, onStopped, onClose }: RecorderCal
         <Flex gap="2">
           <Box flexGrow="1">
             <TextField.Root ref={stepInput} autoFocus value={stepName} onChange={(e) => setStepName(e.target.value)}
-              placeholder="Next step, then Enter" aria-label="Next step" />
+              placeholder={auto ? 'Name the next action (optional)' : 'Next step, then Enter'} aria-label="Next step" />
           </Box>
           <IconButton type="submit" loading={actions.busy === 'step'} disabled={!stepName.trim()} aria-label="Add step" className="press"><Plus weight="bold" /></IconButton>
         </Flex>
@@ -216,7 +219,7 @@ export function FloatingPanel({ win, onChange, onStopped, onClose }: RecorderCal
       )}
 
       {actions.error && <ErrorCallout error={actions.error} />}
-      {live.data && <LiveFeed rec={live.data} stepSeq={active.stepSeq} />}
+      {live.data && <LiveFeed rec={live.data} stepSeq={current.seq} />}
     </Flex>
   );
 }

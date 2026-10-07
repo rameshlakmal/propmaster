@@ -126,7 +126,7 @@ describe('recording through the web app', () => {
       'UPDATE inventory', 'INSERT orders', 'INSERT order_items', 'INSERT payments',
     ]);
     const total = step.changes[1].columns.find((c: { column: string }) => c.column === 'total');
-    expect(total).toEqual({ column: 'total', before: null, after: '84.50', changed: false }); // exact value, formatted on the server
+    expect(total).toEqual({ column: 'total', before: null, after: '84.50', changed: false, beforeKind: null, afterKind: 'number' }); // exact value, formatted on the server
 
     // Pause, flag and resume: the markers come back with the step, and paused shows in status.
     expect((await call('POST', '/api/record/pause')).data).toEqual({ ok: true });

@@ -93,7 +93,8 @@ export function formatTimeline(rec: Recording, { colors, width, hidden = 0 }: Ti
     const markers = step.markers ?? [];
     if (step.seq === 0 && step.changes.length === 0 && markers.length === 0) continue;
     lines.push('');
-    lines.push(spread(` ${c.cyan(c.bold(`STEP ${step.seq}`))}  ${c.bold(step.name)}`, c.dim(plural(step.changes.length, 'change')), s.width));
+    const count = plural(step.changes.length, 'change');
+    lines.push(spread(` ${c.cyan(c.bold(`STEP ${step.seq}`))}  ${c.bold(step.name)}`, c.dim(step.auto ? `auto · ${count}` : count), s.width));
     lines.push(...markers.map((m) => markerLine(m, c)));
     if (step.changes.length === 0) lines.push(`   ${c.dim('no database changes')}`);
     else lines.push(...boxTable(s, COLUMNS, step.changes.map((ch) => changeRow(ch, c)), { measure }));

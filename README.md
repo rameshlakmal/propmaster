@@ -74,10 +74,11 @@ npm run ui           # opens Propmaster in your browser
 
 1. **Setup:** paste your test database's connection string, press **Test** to see what your DB user can do, and save it. Install the recorder with one click.
 2. **Record:** name the test case and press **Start recording**. Before each action in the app you're testing, type what you're about to do and press Enter. The changes appear live under that step.
+   - **Name steps for me** (live recording): no typing at all. Each action you take becomes a step when the app goes quiet for 3 seconds, named after what it changed, such as *New order #66 with order item, payment · inventory product_id 3 stock 14 → 12* or *Order #66 status PENDING → CANCELLED*. Type a name first when you want to choose it.
    - **Pop out** (Chrome and Edge) opens a small floating window that stays on top of the app you're testing: add steps, pause, flag and stop from there, and watch the latest changes arrive.
    - **Pause** while you do setup that isn't part of the test; nothing is recorded until you resume.
    - **Flag** a step when something looks wrong, with a note. Flags show in the timeline and in every export.
-3. **Sessions:** open any recording to search it, filter by table or operation, click a change for its before and after values, and export it (HTML, Markdown, SQL checks).
+3. **Sessions:** open any recording to search it, filter by table or operation, and export it (HTML, Markdown, SQL checks). Each change is laid out as labelled fields: the new values of an insert, *old → new* for an update, and what a deleted row held, with text unquoted and times in your local format. Click a change for every column, exactly as stored.
 4. **Rules:** open your rules file, edit it, and run it against a session.
 
 ![Recording live in the web app](docs/images/web-app-recording.png)
@@ -131,7 +132,7 @@ Not sure what your DB user is allowed to do? Run `propmaster doctor`.
 | `ui` | Opens the web app in your browser (`--port`, `--no-open`). |
 | `doctor` | Checks what your DB user can do, recommends a mode, and lists the GRANTs to ask a DBA for. |
 | `install` / `uninstall` | Adds or removes the recorder (`uninstall` asks you to type `uninstall`, or pass `--yes`). Re-running `install` upgrades in place. |
-| `record start [name]` | Starts a session. `--snapshot` for snapshot mode, with `--exclude` and `--max-rows`. |
+| `record start [name]` | Starts a session. `--auto-steps [seconds]` splits it into steps at quiet gaps (default 3 s) and names them, so you don't type steps. `--snapshot` for snapshot mode, with `--exclude` and `--max-rows`. |
 | `record step <name>` | Starts the next test step. Changes before the first step go into step 0. |
 | `record pause` / `resume` | Pauses recording (the session stays open) and resumes it. |
 | `record flag [note]` | Flags the current step ("this looks wrong"), with an optional note. |

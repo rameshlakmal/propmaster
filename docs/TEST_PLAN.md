@@ -36,6 +36,7 @@ So most tests target those two risks. Features such as filters and exports come 
 | R18 | Another program or website drives the web app (it can reach your test databases) | Low · **High** | Listens on 127.0.0.1 only; a secret token per run, accepted in a header only; Host-header check against DNS rebinding; Origin check against cross-site requests; passwords never sent to the browser | `test/ui-server.integration.test.ts`: security suite |
 | R19 | The web app shows something different from what was recorded | Low · High | Values are formatted on the server with the same code as the CLI (exact numbers) | `records steps, shows them live, and stops` (exact `84.50`); browser walkthrough |
 | R20 | Pausing loses or leaks changes: setup done while paused shows in the test, or changes before the pause disappear | Med · High | Trigger mode skips capture while the state row says paused; snapshot mode compares at the pause and takes a fresh baseline on resume; a new session always starts unpaused | `test/pause.integration.test.ts`: both modes, steps while paused, stopping while paused, errors for pausing twice; CLI e2e; browser walkthrough |
+| R21 | Auto steps split or name an action wrongly, or differently each time a recording is read | Med · Med | Steps are worked out by a pure function from the stored changes and the gap saved with the session; typed names always win for the next action | `test/autosteps.test.ts` (splitting, naming, markers); `test/autosteps.integration.test.ts` (live, after stop, re-read, typed name, snapshot refused); browser walkthrough |
 
 ## 3. Test levels
 
@@ -89,6 +90,8 @@ Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
 - ⬜ The Markdown export pasted into a Jira ticket.
 - ✅ Web app walkthrough in headless Edge, driven like a tester (22 checks): start a recording from the form, add steps with Enter, see a real EverShop change appear live, stop, open the session, expand a change, search, run rules, run the access check, light and dark mode, phone width, and no console errors from the app.
 - ✅ Floating window walkthrough in headless Edge (24 checks): upgrade an older recorder from Setup, pause, resume and flag on the page, pop out, add a step from the floating window (the page follows), see a real order arrive in its live feed, pause there (setup while paused is not recorded), resume, flag with a note, stop (the page shows the stopped view with the markers), close, and no console errors.
+- ✅ Auto steps and the new Changes layout in headless Edge (14 checks): start with **Name steps for me**, two demo-shop actions become two named steps, a typed name goes to the next action, the session shows labelled fields, unquoted text, readable times and old → new, auto steps are labelled, no sideways page scrolling at phone width, no console errors.
+- ⬜ Auto steps against a real app (EverShop): busy tables such as `event` should be excluded, or they keep a step from going quiet.
 - ⬜ Floating window in a real (not headless) Chrome: it stays on top of another application's window.
 
 ## 7. Known limitations (by design in v0.1)

@@ -1,44 +1,67 @@
 import { Badge, Box, Card, Flex, Heading, Table, Text } from '@radix-ui/themes';
 import { Flag, Pause, Play } from '@phosphor-icons/react';
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
+import { Value } from './Value';
 import type { Change, Marker, Step } from '../types';
 
-const SUMMARY_LIMIT = 48;
+/** How many fields an insert or delete shows before "+N more"; the expanded row has them all. */
+const FIELD_LIMIT = 8;
 
-/** Long values are shortened in the row; the expanded row shows them in full. */
-function short(value: string | null): string {
-  if (value === null) return 'NULL';
-  return value.length > SUMMARY_LIMIT ? `${value.slice(0, SUMMARY_LIMIT - 1)}…` : value;
-}
-
-function ChangeSummary({ change }: { change: Change }) {
-  if (change.op === 'TRUNCATE') return <Text color="gray" size="2">every row removed</Text>;
-  if (change.op === 'DELETE') {
-    return change.key
-      ? <Text color="gray" size="2">row removed</Text>
-      : <Text className="mono value-before cell-wrap">{change.columns.map((c) => `${c.column}=${short(c.before)}`).join('  ')}</Text>;
-  }
-  if (change.op === 'UPDATE') {
-    return (
-      <Flex direction="column" gap="1">
-        {change.columns.map((c) => (
-          <Text key={c.column} className="mono">
-            {c.column} <span className="value-before">{short(c.before)}</span> <span aria-hidden>→</span>
-            <span className="sr-only"> changed to </span> <span className="value-after">{short(c.after)}</span>
-          </Text>
-        ))}
-      </Flex>
-    );
-  }
-  const keyCols = new Set((change.key ?? '').split(' ').map((p) => p.split('=')[0]));
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <Text className="mono cell-wrap" color="gray">
-      {change.columns.filter((c) => !keyCols.has(c.column)).map((c) => `${c.column}=${short(c.after)}`).join('  ')}
-    </Text>
+    <div className="field">
+      <span className="field-label" title={label}>{label}</span>
+      <span className="field-value">{children}</span>
+    </div>
   );
 }
 
-/** Every column of a change, before and after, for when a row is expanded. */
+/** "id=66 sku='A1'" → the key column names, so inserts don't repeat what the Row column shows. */
+function keyColumns(change: Change): Set<string> {
+  return new Set((change.key ?? '').split(' ').map((p) => p.split('=')[0]!).filter(Boolean));
+}
+
+/**
+ * What a change did, laid out as labelled fields: new values for an insert, old → new for an update,
+ * the removed values for a delete.
+ */
+function ChangeSummary({ change }: { change: Change }) {
+  if (change.op === 'TRUNCATE') return <Text color="gray" size="2">Every row in the table was removed.</Text>;
+
+  if (change.op === 'UPDATE') {
+    return (
+      <div className="fields fields-wide">
+        {change.columns.map((c) => (
+          <Field key={c.column} label={c.column}>
+            <span className="was"><Value sql={c.before} kind={c.beforeKind} max={32} /></span>
+            <span className="arrow" aria-hidden>→</span>
+            <span className="sr-only"> changed to </span>
+            <span className="now"><Value sql={c.after} kind={c.afterKind} max={32} /></span>
+          </Field>
+        ))}
+      </div>
+    );
+  }
+
+  const removed = change.op === 'DELETE';
+  const keys = keyColumns(change);
+  const columns = change.columns.filter((c) => !keys.has(c.column));
+  if (columns.length === 0) return <Text color="gray" size="2">{removed ? 'Row removed.' : 'Only the key columns.'}</Text>;
+  const shown = columns.slice(0, FIELD_LIMIT);
+  return (
+    <div className={`fields${removed ? ' fields-removed' : ''}`}>
+      {removed && <span className="fields-note">Row removed. It held:</span>}
+      {shown.map((c) => (
+        <Field key={c.column} label={c.column}>
+          {removed ? <Value sql={c.before} kind={c.beforeKind} max={40} /> : <Value sql={c.after} kind={c.afterKind} max={40} />}
+        </Field>
+      ))}
+      {columns.length > shown.length && <span className="fields-note">+{columns.length - shown.length} more · open the row to see every column</span>}
+    </div>
+  );
+}
+
+/** Every column of a change, before and after, exactly as stored, for when a row is expanded. */
 function ChangeDetail({ change }: { change: Change }) {
   const showBefore = change.op !== 'INSERT';
   const showAfter = change.op !== 'DELETE';
@@ -56,8 +79,8 @@ function ChangeDetail({ change }: { change: Change }) {
           {change.columns.map((c) => (
             <Table.Row key={c.column}>
               <Table.RowHeaderCell><Text weight="medium" size="2">{c.column}</Text></Table.RowHeaderCell>
-              {showBefore && <Table.Cell className="mono cell-wrap value-before">{c.before}</Table.Cell>}
-              {showAfter && <Table.Cell className={`mono cell-wrap ${c.changed ? 'value-after' : ''}`}>{c.after}</Table.Cell>}
+              {showBefore && <Table.Cell className={`cell-wrap ${c.changed ? 'was' : ''}`}><Value sql={c.before} kind={c.beforeKind} exact /></Table.Cell>}
+              {showAfter && <Table.Cell className={`cell-wrap ${c.changed ? 'now' : ''}`}><Value sql={c.after} kind={c.afterKind} exact /></Table.Cell>}
             </Table.Row>
           ))}
         </Table.Body>
@@ -73,12 +96,12 @@ function ChangeDetail({ change }: { change: Change }) {
 function StepTable({ step }: { step: Step }) {
   const [open, setOpen] = useState<number | null>(null);
   return (
-    <Table.Root size="1" variant="surface">
+    <Table.Root size="1" variant="surface" className="step-table">
       <Table.Header>
         <Table.Row>
           <Table.ColumnHeaderCell width="96px">Op</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell width="18%">Table</Table.ColumnHeaderCell>
-          <Table.ColumnHeaderCell width="20%">Row</Table.ColumnHeaderCell>
+          <Table.ColumnHeaderCell width="16%">Table</Table.ColumnHeaderCell>
+          <Table.ColumnHeaderCell width="14%">Row</Table.ColumnHeaderCell>
           <Table.ColumnHeaderCell>Changes</Table.ColumnHeaderCell>
         </Table.Row>
       </Table.Header>
@@ -148,6 +171,7 @@ export function Timeline({ steps, currentSeq }: { steps: Step[]; currentSeq?: nu
             <Flex align="center" gap="3">
               <Badge color={step.seq === currentSeq ? 'cyan' : 'gray'} variant="soft" size="2">Step {step.seq}</Badge>
               <Heading as="h3" size="3" weight="medium">{step.name}</Heading>
+              {step.auto && <Badge color="gray" variant="outline" title="Named by Propmaster from its changes">auto</Badge>}
               {step.seq === currentSeq && <Text size="1" color="cyan">now</Text>}
               {step.markers.some((m) => m.kind === 'flag') && <Badge color="amber" variant="soft"><Flag weight="fill" size={12} /> flagged</Badge>}
             </Flex>

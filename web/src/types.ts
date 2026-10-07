@@ -36,6 +36,7 @@ export interface ActiveSession {
   stepSeq: number;
   stepName: string;
   paused: boolean;
+  autoSplitMs: number | null;
 }
 
 export interface Status {
@@ -58,10 +59,15 @@ export interface SessionSummary {
 
 export interface ColumnChange {
   column: string;
+  /** As written in SQL: 'text', 84.50, NULL. */
   before: string | null;
   after: string | null;
   changed: boolean;
+  beforeKind: ValueKind | null;
+  afterKind: ValueKind | null;
 }
+
+export type ValueKind = 'null' | 'text' | 'number' | 'boolean' | 'timestamp' | 'date' | 'json';
 
 export interface Change {
   id: number;
@@ -77,6 +83,8 @@ export interface Change {
 export interface Step {
   seq: number;
   name: string;
+  /** Named by Propmaster from its changes (auto steps). */
+  auto: boolean;
   startedAt: string;
   changes: Change[];
   markers: Marker[];
@@ -96,6 +104,8 @@ export interface Recording {
   startedAt: string;
   stoppedAt: string | null;
   notes: string[];
+  /** Auto steps: the quiet gap (ms) that ends a step. */
+  autoSplitMs: number | null;
   summary: { changes: number; tables: number; byOp: Record<string, number> };
   steps: Step[];
 }

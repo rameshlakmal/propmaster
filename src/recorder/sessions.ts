@@ -2,6 +2,7 @@
 // Trigger sessions live in the database; snapshot sessions live in local files tied to a database identity.
 import type { Db } from '../core/db.js';
 import { UserError } from '../core/errors.js';
+import { DEFAULT_GAP_MS } from './autosteps.js';
 import * as snapshot from './snapshot.js';
 import * as trigger from './trigger.js';
 import type { Mode, Recording, SessionSummary } from './types.js';
@@ -15,6 +16,8 @@ export interface ActiveSession {
   stepName: string;
   /** Paused: the session is open, but changes aren't recorded. */
   paused: boolean;
+  /** Auto steps: the quiet gap (ms) that ends a step, or null when steps are typed. */
+  autoSplitMs: number | null;
 }
 
 export interface RecorderStatus {
@@ -30,6 +33,8 @@ export interface StartOptions {
   snapshot?: boolean;
   exclude?: string[];
   maxRows?: number;
+  /** Split steps at quiet gaps and name them (trigger mode). True for the default gap, or the gap in ms. */
+  autoSteps?: boolean | number;
 }
 
 export interface Started {
@@ -51,7 +56,7 @@ export async function status(db: Db, identity: string): Promise<RecorderStatus> 
   const s = await trigger.status(db);
   const snap = await activeSnapshotFor(identity);
   const active: ActiveSession | null = snap
-    ? { id: snap.id, name: snap.name, mode: 'snapshot', startedAt: snap.startedAt, stepSeq: snap.stepSeq, stepName: snap.stepName, paused: snap.paused }
+    ? { id: snap.id, name: snap.name, mode: 'snapshot', startedAt: snap.startedAt, stepSeq: snap.stepSeq, stepName: snap.stepName, paused: snap.paused, autoSplitMs: null }
     : s.active ? { ...s.active, mode: 'trigger' } : null;
   return { installed: s.installed, outdated: s.outdated, watchedTables: s.watchedTables, excludedTables: s.excludedTables, active };
 }
@@ -60,12 +65,17 @@ export async function start(db: Db, identity: string, name: string, options: Sta
   const active = await activeSnapshotFor(identity);
   if (active) throw new UserError(`Snapshot session ${active.id} is already recording.`, 'Stop it first.');
 
+  const gap = options.autoSteps === true ? DEFAULT_GAP_MS : typeof options.autoSteps === 'number' ? options.autoSteps : undefined;
+  if (gap !== undefined && (!Number.isFinite(gap) || gap < 500 || gap > 600_000)) {
+    throw new UserError('The quiet gap for auto steps must be between 0.5 and 600 seconds.');
+  }
   if (options.snapshot) {
+    if (gap !== undefined) throw new UserError('Auto steps need live recording (trigger mode).', 'Snapshot mode only sees changes when you add a step, so it cannot tell actions apart.');
     const s = await snapshot.startSnapshot(db, identity, name, { exclude: options.exclude, maxRows: options.maxRows });
     return { id: s.id, mode: 'snapshot', tables: s.tables, skipped: s.skipped };
   }
   if (options.exclude?.length) throw new UserError('Excluding tables at start is for snapshot mode.', 'In trigger mode, exclude tables once with `propmaster record exclude <table>`.');
-  const id = await trigger.start(db, name);
+  const id = await trigger.start(db, name, gap);
   return { id, mode: 'trigger', tables: (await trigger.status(db)).watchedTables, skipped: [] };
 }
 

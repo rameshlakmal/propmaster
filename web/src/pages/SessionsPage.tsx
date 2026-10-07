@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { api, downloadExport } from '../api';
 import { EmptyState, ErrorCallout, PageHeader, RetryButton, TimelineSkeleton } from '../components/Feedback';
 import { Timeline } from '../components/Timeline';
+import { valueText } from '../components/Value';
 import { formatWhen, toError, useLoad } from '../hooks';
 import type { ApiError, Change, Recording, SessionSummary } from '../types';
 
@@ -53,7 +54,7 @@ function SessionList({ activeProfile }: { activeProfile: string | null }) {
 
 function matches(change: Change, text: string): boolean {
   if (!text) return true;
-  const hay = [change.table, change.key ?? '', ...change.columns.flatMap((c) => [c.column, c.before ?? '', c.after ?? ''])].join(' ').toLowerCase();
+  const hay = [change.table, change.key ?? '', ...change.columns.flatMap((c) => [c.column, valueText(c.before), valueText(c.after)])].join(' ').toLowerCase();
   return hay.includes(text.toLowerCase());
 }
 

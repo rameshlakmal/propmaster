@@ -92,8 +92,10 @@ const routes: [string, RegExp, Handler][] = [
     ...(await sessions.status(db, identity)),
   }))],
   ['POST', /^\/api\/record\/start$/, async (req) => {
-    const { name, snapshot } = await req.body();
-    return withActive((db, identity) => sessions.start(db, identity, str(name, 'name'), { snapshot: snapshot === true }));
+    const { name, snapshot, autoSteps } = await req.body();
+    if (autoSteps !== undefined && typeof autoSteps !== 'boolean' && typeof autoSteps !== 'number') throw new UserError('"autoSteps" must be true, false or the gap in seconds.');
+    const gap = typeof autoSteps === 'number' ? Math.round(autoSteps * 1000) : autoSteps === true;
+    return withActive((db, identity) => sessions.start(db, identity, str(name, 'name'), { snapshot: snapshot === true, autoSteps: gap }));
   }],
   ['POST', /^\/api\/record\/step$/, async (req) => {
     const { name } = await req.body();

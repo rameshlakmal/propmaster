@@ -178,13 +178,17 @@ record
   .argument('[name]', 'session name', 'Test session')
   .description('Start recording')
   .option('--snapshot', 'compare snapshots instead of using triggers (needs only read access)')
+  .option('--auto-steps [seconds]', 'no need to type steps: a quiet gap (default 3 s) ends a step, and each step is named after its changes')
   .option('--exclude <tables>', 'snapshot mode: tables to leave out (comma-separated, patterns allowed)', list)
   .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(DEFAULT_MAX_ROWS).argParser(Number))
-  .action(run(async (ctx, name: string, opts: { snapshot?: boolean; exclude?: string[]; maxRows: number }) => {
-    const next = [hint(c, 'before each test step: propmaster record step "<name>"'), hint(c, 'when you are done:    propmaster record stop')];
+  .action(run(async (ctx, name: string, opts: { snapshot?: boolean; exclude?: string[]; maxRows: number; autoSteps?: boolean | string }) => {
+    const autoSteps = opts.autoSteps === undefined || opts.autoSteps === true ? opts.autoSteps : Math.round(Number(opts.autoSteps) * 1000);
+    const next = autoSteps
+      ? [hint(c, 'just test: each action becomes a step, named after its changes'), hint(c, 'to name the next action yourself: propmaster record step "<name>"'), hint(c, 'when you are done: propmaster record stop')]
+      : [hint(c, 'before each test step: propmaster record step "<name>"'), hint(c, 'when you are done:    propmaster record stop')];
     const recording = (id: string, detail: string) => spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${id}`)} · ${name}`, c.dim(detail), ui.width);
-    const s = await sessions.start(ctx.db, ctx.identity, name, { snapshot: opts.snapshot, exclude: opts.exclude, maxRows: opts.maxRows });
-    say(recording(s.id, s.mode === 'snapshot' ? `snapshot mode · ${s.tables} tables read` : `${s.tables} tables watched`));
+    const s = await sessions.start(ctx.db, ctx.identity, name, { snapshot: opts.snapshot, exclude: opts.exclude, maxRows: opts.maxRows, autoSteps });
+    say(recording(s.id, s.mode === 'snapshot' ? `snapshot mode · ${s.tables} tables read` : `${s.tables} tables watched${autoSteps ? ' · auto steps' : ''}`));
     if (s.skipped.length) say(`   ${c.yellow(`! not watched (over ${opts.maxRows} rows): ${s.skipped.join(', ')}`)}`);
     say(...next);
   }));
@@ -240,10 +244,13 @@ record
   .action(run(async (ctx) => {
     const s = await sessions.status(ctx.db, ctx.identity);
     if (s.active) {
-      const detail = s.active.mode === 'snapshot' ? 'snapshot mode' : `${s.watchedTables} tables watched`;
+      const detail = s.active.mode === 'snapshot' ? 'snapshot mode'
+        : `${s.watchedTables} tables watched${s.active.autoSplitMs ? ` · auto steps (${s.active.autoSplitMs / 1000} s gap)` : ''}`;
       const badge = s.active.paused ? `${i.pause} ${c.yellow(c.bold('PAUSED'))}` : `${i.rec} ${c.red(c.bold('REC'))}`;
-      say(spread(` ${badge}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(detail), ui.width),
-        `   ${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`);
+      // With auto steps, the steps come from the changes so far: show the latest one.
+      const last = s.active.autoSplitMs ? (await sessions.load(ctx.db, ctx.identity, s.active.id)).steps.at(-1) : undefined;
+      const current = last ? `${c.dim('last step')} ${c.cyan(`STEP ${last.seq}`)} ${last.name}` : `${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`;
+      say(spread(` ${badge}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(detail), ui.width), `   ${current}`);
     } else if (!s.installed) say(` ${i.idle} Not recording. The recorder is not installed.`, hint(c, 'propmaster install, or propmaster record start --snapshot'));
     else say(` ${i.idle} Not recording ${c.dim(`· ${s.watchedTables} tables watched`)}`);
     if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);

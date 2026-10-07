@@ -86,7 +86,7 @@ describe('propmaster CLI', () => {
 
     expect((await cli(['uninstall'])).out).toContain('Cancelled. Nothing was removed.'); // no TTY, no --yes
     expect((await cli(['uninstall', '--yes'])).out).toContain(' ✔ Recorder removed');
-  });
+  }, 60_000); // about 17 CLI runs of ~1.5 s each
 
   it('records in snapshot mode as a read-only user', async () => {
     await resetDatabase(db);

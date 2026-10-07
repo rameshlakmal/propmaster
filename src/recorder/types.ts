@@ -40,6 +40,8 @@ export interface Step {
   changes: Change[];
   /** Pauses, resumes and flags during this step, in time order. */
   markers?: Marker[];
+  /** Named by Propmaster from its changes (auto steps), not typed by the tester. */
+  auto?: boolean;
 }
 
 export interface Column {
@@ -62,6 +64,8 @@ export interface Recording {
   columns: Record<string, Column[]>;
   /** Things the reader should know, such as tables skipped in snapshot mode. */
   notes: string[];
+  /** Auto steps: the quiet gap (ms) that ends a step. Absent when steps were typed. */
+  autoSplitMs?: number;
 }
 
 export interface SessionSummary {
