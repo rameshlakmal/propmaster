@@ -71,13 +71,17 @@ Results for the release are recorded in the README. On Docker Desktop, round-tri
 
 ## 6. Exploratory checklist (manual, before a release)
 
-- [ ] HTML report opens offline in Chrome, Firefox and Edge; the search box and operation buttons filter correctly.
-- [ ] HTML report follows the system's dark mode; it is readable at phone width (no sideways scrolling of the page).
-- [ ] Keyboard only: Tab reaches the search box, the buttons and every change; Enter opens and closes a change.
-- [ ] `record export --open` opens the report on Windows, macOS and Linux.
-- [ ] Ctrl+C during `record start --snapshot` leaves no half-written session (re-run `record status`).
-- [ ] Very long values (2 KB text, large JSON) keep the timeline on one line per change and wrap in the HTML.
-- [ ] A Markdown export pasted into a GitHub issue and a Jira ticket renders as tables.
+Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
+
+- ✅ HTML report in Chromium: search box and operation buttons filter correctly (driven through the DevTools protocol).
+- ⬜ HTML report in Firefox and Edge.
+- ✅ HTML report follows the system's dark mode, and has no sideways scrolling at 1200 px or at phone width (390 px), even with 2 KB text and large JSON values.
+- ✅ Keyboard only: Tab reaches the search box, the buttons and each change; Space and Enter toggle the buttons; Enter opens and closes a change; focus has a visible outline; long values scroll in their own focusable box.
+- ⬜ `record export --open` on macOS and Linux (✅ Windows).
+- ✅ Killing the CLI during `record step --snapshot`, at five moments from start-up to file writing, leaves a usable session. Now an automated test (`survives being killed in the middle of a snapshot step`); snapshot files are written atomically.
+- ✅ Very long values keep the timeline to one short line per change, and appear in full in the HTML report (automated: `very long values`).
+- ✅ The Markdown export renders as tables on GitHub (checked with GitHub's Markdown renderer).
+- ⬜ The Markdown export pasted into a Jira ticket.
 
 ## 7. Known limitations (by design in v0.1)
 

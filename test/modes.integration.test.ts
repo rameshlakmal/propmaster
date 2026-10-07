@@ -158,6 +158,18 @@ describe('snapshot mode (read-only user)', () => {
     expect(await snapshot.listSnapshots(identity)).toEqual([]);
   });
 
+  it('leaves no temporary files, and skips a corrupt session file instead of failing', async () => {
+    const { readdir, writeFile } = await import('node:fs/promises');
+    await snapshot.startSnapshot(reader, identity, 'one');
+    await snapshot.stepSnapshot(reader, identity, 'x');
+    await snapshot.stopSnapshot(reader, identity);
+    const files = await readdir(join(home, 'snapshots'));
+    expect(files.filter((f) => f.endsWith('.tmp'))).toEqual([]);
+
+    await writeFile(join(home, 'snapshots', 's7.json'), '{"identity": "half a fi');
+    expect((await snapshot.listSnapshots(identity)).map((s) => s.id)).toEqual(['s1']);
+  });
+
   it('explains when nothing is recording', async () => {
     await expect(snapshot.stepSnapshot(reader, identity, 'x')).rejects.toThrow(/Nothing is recording in snapshot mode/);
   });

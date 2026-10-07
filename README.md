@@ -38,7 +38,13 @@ Total: 6 changes across 4 tables
 
 ## Quick start
 
-Needs Node 22.12+ and Docker.
+**Just want to see it?** With only Docker installed:
+
+```sh
+docker compose run --rm demo   # starts Postgres with the demo shop, then records, reports and checks rules
+```
+
+**To use it,** with Node 22.12+ and Docker:
 
 ```sh
 npm install
@@ -207,3 +213,7 @@ The [test plan](docs/TEST_PLAN.md) covers the risks, test levels and exit criter
 ## Roadmap
 
 Tool 1 (this) → **Tool 2: Test Data Finder** (saved SQL recipes for "find me a customer with an expired card") → **Tool 3: Seeder & Cleaner** (scenario seeding, safe cleanup, and undo of a recorded session) → a local dashboard and a Chrome side panel that marks test steps as you click.
+
+## License
+
+[MIT](LICENSE)

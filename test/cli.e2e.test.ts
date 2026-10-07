@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -94,6 +94,31 @@ describe('propmaster CLI', () => {
     expect(stop.out).toContain('snapshot mode');
     expect(stop.out).toContain('Step 1 · Order · 4 changes');
     expect((await cli(['record', 'list'], reader)).out).toMatch(/#s\d+.*RO\s+\(4 changes\) snapshot/);
+  });
+
+  it('survives being killed in the middle of a snapshot step', async () => {
+    await resetDatabase(db);
+    await db.query('GRANT USAGE ON SCHEMA public TO propmaster_reader');
+    await db.query('GRANT SELECT ON ALL TABLES IN SCHEMA public TO propmaster_reader');
+    const reader = urlAs('propmaster_reader');
+    await cli(['record', 'start', 'Interrupted', '--snapshot'], reader);
+
+    // Kill a step while it reads tables and writes files; wherever it stops, the session must stay usable.
+    const env = { ...process.env, NO_COLOR: '1', PROPMASTER_HOME: home, PROPMASTER_DATABASE_URL: '' };
+    // Several kill moments, from Node still starting up to the step writing its files.
+    for (const delay of [300, 600, 900, 1200, 1500]) {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', '--url', reader, 'record', 'step', `Killed at ${delay} ms`], { env });
+      const exited = new Promise((r) => child.on('exit', r)); // listen first: it may finish before the kill
+      await new Promise((r) => setTimeout(r, delay));
+      child.kill('SIGKILL');
+      await exited;
+      expect((await cli(['record', 'status'], reader)).out).toContain('"Interrupted" in snapshot mode');
+    }
+    await db.query('SELECT place_order(1, 1, 1)');
+    const stop = await cli(['record', 'stop'], reader);
+    expect(stop.code).toBe(0);
+    expect(stop.out).toContain('INSERT orders');
+    expect((await cli(['record', 'list'], reader)).out).toContain('Interrupted');
   });
 
   it('checks business rules and fails the run when one breaks', async () => {

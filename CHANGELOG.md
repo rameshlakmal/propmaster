@@ -24,7 +24,7 @@ The first release: **Tool 1, the DB Change Recorder**.
 - **Masking** of passwords, tokens, keys, card numbers and e-mail addresses. On by default for exports (`--no-mask` to turn off); `--mask` for the terminal; `--mask-columns` for extra columns.
 - **Housekeeping:** `record list`, `record delete`, `record prune --older-than`, and `record exclude` / `record include` for busy tables.
 - **Safety:** connections to hosts or databases named like production are refused; attaching triggers waits at most 5 seconds for table locks; clear error messages with a next step.
-- **Demo:** a small e-commerce database in Docker (`npm run db:up`) and the whole flow in one command (`npm run demo`).
+- **Demo:** a small e-commerce database in Docker (`npm run db:up`) and the whole flow in one command: `docker compose run --rm demo` (only Docker needed) or `npm run demo`.
 - Tests on PostgreSQL 13 to 17 in CI, a written test plan, and a benchmark (`npm run bench`).
 
 [0.1.0]: https://github.com/rameshlakmal/propmaster/releases/tag/v0.1.0

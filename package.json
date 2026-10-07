@@ -52,5 +52,6 @@
     "database-testing",
     "audit-trigger",
     "cli"
-  ]
+  ],
+  "license": "MIT"
 }

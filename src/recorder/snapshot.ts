@@ -3,7 +3,7 @@
 // It needs only SELECT. It can't see who made a change, and a row changed twice within one step shows
 // once (inserted and deleted again within a step: not at all).
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from '../core/db.js';
 import { UserError } from '../core/errors.js';
@@ -64,9 +64,12 @@ const sessionFile = (id: string) => join(dir(), `${id}.json`);
 const stateFile = (id: string) => join(dir(), `${id}.state.json`);
 const activeFile = () => join(dir(), 'active.json');
 
+/** Writes to a temporary file, then renames it into place: Ctrl+C or a crash never leaves half a file. */
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dir(), { recursive: true });
-  await writeFile(path, JSON.stringify(value), 'utf8');
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(value), 'utf8');
+  await rename(tmp, path);
 }
 
 function reviveDates(rec: Recording): Recording {
@@ -84,8 +87,14 @@ function reviveDates(rec: Recording): Recording {
 
 async function readSession(id: string): Promise<StoredSession | null> {
   if (!existsSync(sessionFile(id))) return null;
-  const stored = parseJsonExact(await readFile(sessionFile(id), 'utf8')) as StoredSession;
-  return { ...stored, recording: reviveDates(stored.recording) };
+  try {
+    const stored = parseJsonExact(await readFile(sessionFile(id), 'utf8')) as StoredSession;
+    return { ...stored, recording: reviveDates(stored.recording) };
+  } catch {
+    // Only possible for files from before atomic writes, or edited by hand: treat as missing.
+    process.emitWarning(`Ignoring unreadable snapshot session file ${sessionFile(id)}`);
+    return null;
+  }
 }
 
 async function readActiveId(): Promise<string | null> {

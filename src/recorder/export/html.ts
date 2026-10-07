@@ -32,6 +32,17 @@ function oneLine(change: Change): string {
   }
 }
 
+// Longer values get a cell of fixed height with its own scrollbar, so one big value can't swamp the report.
+const LONG_VALUE = 160;
+
+function cellHtml(side: 'before' | 'after', value: unknown): string {
+  const text = formatValue(value);
+  const long = text.length > LONG_VALUE;
+  return long
+    ? `<td class="${side} long"><div class="scroll" tabindex="0" role="region" aria-label="${side} value, ${text.length} characters">${e(text)}</div></td>`
+    : `<td class="${side}">${e(text)}</td>`;
+}
+
 function renderChange(change: Change): string {
   const key = formatKey(change);
   const diffs = columnDiffs(change);
@@ -43,8 +54,8 @@ function renderChange(change: Change): string {
   const rows = diffs.map((d) => `
           <tr${d.changed ? ' class="changed"' : ''}>
             <th scope="row">${e(d.column)}</th>
-            ${showBefore ? `<td class="before">${e(formatValue(d.before))}</td>` : ''}
-            ${showAfter ? `<td class="after">${e(formatValue(d.after))}</td>` : ''}
+            ${showBefore ? cellHtml('before', d.before) : ''}
+            ${showAfter ? cellHtml('after', d.after) : ''}
           </tr>`).join('');
 
   const body = diffs.length === 0 ? '' : `
@@ -138,6 +149,8 @@ tbody th { font-weight: 550; white-space: nowrap; width: 1%; }
 td { overflow-wrap: anywhere; }
 tr td.before:not(:last-child), tr td.before + td.after { width: 50%; }
 tr.changed td.before { color: var(--delete); text-decoration: line-through; text-decoration-thickness: 1px; }
+tr.changed td.before.long { text-decoration: none; } /* struck-through paragraphs are unreadable */
+td.long .scroll { max-height: 12em; overflow-y: auto; white-space: pre-wrap; }
 tr.changed td.after { background: var(--changed); font-weight: 600; }
 .brief { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .change[open] .brief { white-space: normal; }

@@ -1,0 +1,5 @@
+# Text files use LF everywhere, so SQL and shell scripts behave the same on Windows, macOS and Linux.
+* text=auto eol=lf
+
+*.gif binary
+*.png binary

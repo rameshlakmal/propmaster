@@ -19,3 +19,21 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  # The whole demo in one command, with only Docker installed: docker compose run --rm demo
+  demo:
+    image: node:24-slim
+    profiles: [demo]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    environment:
+      PROPMASTER_DATABASE_URL: postgres://propmaster:propmaster@postgres:5432/qa_shop
+    volumes:
+      - .:/app
+      - demo_node_modules:/app/node_modules  # Linux packages, kept apart from the host's node_modules
+    command: sh -c "npm ci --no-audit --no-fund --loglevel=error && npx tsx scripts/demo.ts"
+
+volumes:
+  demo_node_modules:

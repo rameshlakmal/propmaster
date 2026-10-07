@@ -88,6 +88,29 @@ describe('formatTimeline', () => {
   });
 });
 
+describe('very long values', () => {
+  const bigText = 'Lorem ipsum dolor sit amet. '.repeat(75); // about 2 KB
+  const bigJson = { items: Array.from({ length: 200 }, (_, i) => ({ sku: `SKU-${i}`, qty: i })) };
+  const rec = recording([step(1, 'Save a long note', [
+    change({ tableName: 'notes', newValues: { id: 1, body: bigText, meta: bigJson } }),
+    change({ op: 'UPDATE', tableName: 'notes', oldValues: { body: bigText }, newValues: { body: `${bigText}!` } }),
+  ])]);
+
+  it('keep the timeline to one short line per change', () => {
+    const lines = formatTimeline(rec, { colors }).split('\n').filter((l) => l.startsWith('  '));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line.length).toBeLessThan(200);
+    expect(lines[0]).toContain('…');
+  });
+
+  it('keep the full value in the HTML report, for the reader who needs it', async () => {
+    const { toHtml } = await import('../src/recorder/export/html.js');
+    const html = toHtml(rec, { masked: false });
+    expect(html).toContain(bigText.trim());
+    expect(html).toContain('SKU-199');
+  });
+});
+
 describe('formatDuration', () => {
   it.each([[9, '9s'], [75, '1m 15s'], [3725, '1h 2m']])('%i seconds → %s', (s, text) => {
     expect(formatDuration(new Date(0), new Date(s * 1000))).toBe(text);
