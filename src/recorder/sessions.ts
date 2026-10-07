@@ -104,11 +104,26 @@ export async function stop(db: Db, identity: string): Promise<Recording> {
   return (await trigger.getRecording(db, await trigger.stop(db)))!;
 }
 
-/** All sessions for this database, newest first: trigger sessions and local snapshot sessions together. */
-export async function list(db: Db, identity: string): Promise<SessionSummary[]> {
-  const fromDb = (await trigger.isInstalled(db)) ? await trigger.listSessions(db) : [];
+/** The newest sessions for this database, trigger sessions and local snapshot sessions together. */
+export async function list(db: Db, identity: string, limit = 20): Promise<SessionSummary[]> {
+  return (await page(db, identity, 0, limit)).sessions;
+}
+
+export interface SessionPage {
+  sessions: SessionSummary[];
+  /** Sessions in all, on every page. */
+  total: number;
+}
+
+/** `limit` sessions after skipping `offset`, newest first. */
+export async function page(db: Db, identity: string, offset: number, limit: number): Promise<SessionPage> {
+  const installed = await trigger.isInstalled(db);
+  // Enough of the newest from each source to fill this page once they are merged by start time.
+  const fromDb = installed ? await trigger.listSessions(db, offset + limit) : [];
   const local = await snapshot.listSnapshots(identity);
-  return [...fromDb, ...local].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  const merged = [...fromDb, ...local].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  const total = (installed ? await trigger.countSessions(db) : 0) + local.length;
+  return { sessions: merged.slice(offset, offset + limit), total };
 }
 
 /** One session by id ("12" or "s3"), or the latest when no id is given. */
@@ -125,6 +140,20 @@ export async function load(db: Db, identity: string, id?: string): Promise<Recor
   const latest = (await list(db, identity))[0];
   if (!latest) throw new UserError('No sessions recorded yet.', 'Start one with `propmaster record start "My test"`.');
   return load(db, identity, latest.id);
+}
+
+export const MAX_STEP_NAME = 200;
+
+/** Gives step `seq` of session `id` ("12" or "s3") a new name. */
+export async function renameStep(db: Db, id: string, seq: number, name: string): Promise<void> {
+  const clean = id.replace(/^#/, '');
+  const text = name.trim().replace(/\s+/g, ' ');
+  if (!text) throw new UserError('A step needs a name.');
+  if (text.length > MAX_STEP_NAME) throw new UserError(`Step names are at most ${MAX_STEP_NAME} characters.`);
+  if (!Number.isInteger(seq) || seq < 0) throw new UserError(`"${seq}" is not a step number.`, 'Steps are numbered 0, 1, 2… as in the timeline.');
+  if (/^s\d+$/.test(clean)) await snapshot.renameSnapshotStep(clean, seq, text);
+  else if (/^\d+$/.test(clean)) await trigger.renameStep(db, clean, seq, text);
+  else throw new UserError(`"${id}" is not a session id.`, 'Session ids look like 12 (trigger mode) or s3 (snapshot mode).');
 }
 
 export async function remove(db: Db, id: string): Promise<void> {

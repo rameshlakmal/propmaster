@@ -367,6 +367,19 @@ record
   }));
 
 record
+  .command('rename')
+  .argument('<session>', 'session id, e.g. 12 or s3')
+  .argument('<step>', 'step number, as in the timeline')
+  .argument('<name...>', 'the new name, e.g. "Click Place Order"')
+  .description('Rename a step, while recording or afterwards')
+  .action(run(async (ctx, session: string, step: string, name: string[]) => {
+    const id = session.replace(/^#/, '');
+    if (!/^\d+$/.test(step)) throw new UserError(`"${step}" is not a step number.`, 'Steps are numbered 0, 1, 2… as in the timeline.');
+    await sessions.renameStep(ctx.db, id, Number(step), name.join(' '));
+    say(` ${i.ok} Renamed ${c.cyan(`STEP ${step}`)} of session #${id} to ${c.bold(name.join(' ').trim())}`);
+  }));
+
+record
   .command('delete')
   .argument('<session>', 'session id, e.g. 12 or s3')
   .description('Delete a stopped session and its changes')

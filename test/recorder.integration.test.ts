@@ -454,6 +454,7 @@ describe('excluding tables and pruning', () => {
       { relname: 'markers', relpersistence: 'p' },
       { relname: 'sessions', relpersistence: 'p' },
       { relname: 'state', relpersistence: 'p' },
+      { relname: 'step_names', relpersistence: 'p' },
       { relname: 'steps', relpersistence: 'p' },
     ]);
   });

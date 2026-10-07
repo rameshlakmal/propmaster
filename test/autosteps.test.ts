@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bursts, splitSteps } from '../src/recorder/autosteps.js';
 import { describeChanges, singular } from '../src/recorder/describe.js';
-import { valueKind } from '../src/ui/view.js';
+import { jsonChanges, toView, valueKind } from '../src/ui/view.js';
 import { change, recording, step } from './fixtures.js';
 
 const at = (s: number) => new Date(Date.UTC(2026, 9, 7, 10, 0, s));
@@ -87,5 +87,57 @@ describe('value kinds for the web app', () => {
   it('tells times, dates, numbers, text and JSON apart', () => {
     expect([null, 84.5, true, '2026-10-07T15:25:00.612029+00:00', '2026-10-07 15:25:00', '2026-10-07', 'PENDING', { a: 1 }].map(valueKind))
       .toEqual(['null', 'number', 'boolean', 'timestamp', 'timestamp', 'date', 'text', 'json']);
+  });
+
+  it('keeps the structure of JSON, from jsonb columns and from text that holds JSON, with exact numbers', () => {
+    expect(['{"a": 1}', '[1, 2]', '{not json', '[draft]', '"quoted"'].map(valueKind)).toEqual(['json', 'json', 'text', 'text', 'text']);
+    const view = toView(recording([step(1, 'Save settings', [change({
+      tableName: 'settings', rowKey: { id: 1 },
+      newValues: { id: 1, data: { theme: { dark: true }, ids: [1, 2], price: JSON.rawJSON('84.50') }, raw: '{"a":[1]}' },
+    })])]));
+    const columns = view.steps[0]!.changes[0]!.columns;
+    expect(columns.find((c) => c.column === 'data')).toMatchObject({
+      afterKind: 'json',
+      after: `{
+  "theme": {
+    "dark": true
+  },
+  "ids": [
+    1,
+    2
+  ],
+  "price": 84.50
+}`,
+    });
+    expect(columns.find((c) => c.column === 'raw')).toMatchObject({ afterKind: 'json', after: `{
+  "a": [
+    1
+  ]
+}` });
+  });
+});
+
+describe('what changed inside JSON', () => {
+  it('lists each changed path, including added and removed keys and array items', () => {
+    expect(jsonChanges(
+      { packages: [{ name: 'Box', goodsWeight: 1000 }], tags: ['a'], 'odd key': 1, gone: true },
+      { packages: [{ name: 'Box', goodsWeight: 500 }], tags: ['a', 'b'], 'odd key': 2, added: null },
+    )).toEqual([
+      { path: 'packages[0].goodsWeight', before: '1000', after: '500' },
+      { path: 'tags[1]', before: null, after: '"b"' },
+      { path: '["odd key"]', before: '1', after: '2' },
+      { path: 'gone', before: 'true', after: null },
+      { path: 'added', before: null, after: 'null' },
+    ]);
+    expect(jsonChanges([1], { a: 1 })).toEqual([{ path: '(whole value)', before: '[1]', after: '{"a":1}' }]);
+    expect(jsonChanges({ price: JSON.rawJSON('84.50') }, { price: JSON.rawJSON('84.50') })).toEqual([]);
+  });
+
+  it('comes with updated JSON columns in the web view', () => {
+    const view = toView(recording([step(1, 'Ship', [change({
+      op: 'UPDATE', tableName: 'cart', rowKey: { id: 3 },
+      oldValues: { packages: [{ w: 1000 }] }, newValues: { packages: [{ w: 500 }] },
+    })])]));
+    expect(view.steps[0]!.changes[0]!.columns[0]!.jsonChanges).toEqual([{ path: '[0].w', before: '1000', after: '500' }]);
   });
 });

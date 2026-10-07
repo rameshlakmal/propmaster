@@ -67,6 +67,15 @@ ALTER TABLE _propmaster.state ADD COLUMN IF NOT EXISTS paused boolean NOT NULL D
 -- Auto steps: the session is split into steps at quiet gaps of this many milliseconds (NULL: steps are typed).
 ALTER TABLE _propmaster.sessions ADD COLUMN IF NOT EXISTS auto_split_ms integer CHECK (auto_split_ms > 0);
 
+-- Names the tester gave auto steps afterwards. An auto step is worked out from the changes, so its new
+-- name is kept against its first change.
+CREATE TABLE IF NOT EXISTS _propmaster.step_names (
+  session_id       bigint NOT NULL REFERENCES _propmaster.sessions (id) ON DELETE CASCADE,
+  first_change_id  bigint NOT NULL,
+  name             text NOT NULL,
+  PRIMARY KEY (session_id, first_change_id)
+);
+
 -- Things the tester marks during a session: pauses, resumes, and flags ("this looks wrong") with a note.
 CREATE TABLE IF NOT EXISTS _propmaster.markers (
   id          bigserial PRIMARY KEY,

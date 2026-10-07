@@ -7,6 +7,9 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 ### Added
 
 - **Web app** (`propmaster ui`): set up connections with a live access check, install the recorder, record with a Start button and one step per Enter, watch changes appear live, browse and search sessions, open any change for its before and after values, export, and edit and run rules. Light and dark mode. Runs on 127.0.0.1 only, with a secret token per run, a Host-header check (DNS rebinding) and an Origin check. Saved connections live in `~/.propmaster/ui.json`.
+- **Rename steps** after recording (or during): the pencil next to a step name in the web app, or `record rename <session> <step> <name>`. Works for typed steps, auto steps (kept against the step's first change) and snapshot sessions.
+- **Sessions list: delete and pages.** Tick sessions to delete several at once (with a confirmation that counts them), or delete one from its row; a session still recording can't be deleted. The list is paged, 20 a page.
+- **JSON keeps its structure** in the web app: JSON values (jsonb columns, and text columns holding JSON) are indented, exact numbers kept. For an update, the paths inside the JSON that changed are listed (`[0].goodsWeight 1000 → 500`), with the full JSON before and after on request.
 - **Auto steps** (`record start --auto-steps [seconds]`, and **Name steps for me** in the web app): no need to type a step before each action. A quiet gap (default 3 s) ends a step, and each step is named after its changes, e.g. "New order #66 with order item, payment · inventory product_id 3 stock 14 → 12". A typed name goes to the next action. Steps are worked out from the stored changes, so a recording always reads the same. Auto-named steps are marked `auto`. Live (trigger) mode only.
 - **Floating recorder window** (web app, Chrome and Edge): **Pop out** opens a small always-on-top window with the current step, a step field (Enter adds the step), Pause/Resume, Flag with a note, Stop, and a live feed of the latest changes. It keeps working while the Propmaster tab is in the background.
 - **Pause and resume** (`record pause`, `record resume`, and buttons in the web app): the session stays open but nothing is recorded, for setup that isn't part of the test. In snapshot mode, pausing compares the step so far, and resuming takes a fresh snapshot.
@@ -21,6 +24,10 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 - The demo explains itself (it plays a tester) and runs in numbered stages; the Docker demo hides npm's setup output.
 
 ### Fixed
+
+- The web app's session list only ever showed the newest 20 sessions; older ones were unreachable. It now pages through all of them.
+- A session with steps but no changes showed only "no changes", hiding its steps and flags.
+- Two times within the same second read the same in the web app ("09:58:30 PM → 09:58:30 PM"); they now show the exact time.
 
 - A broken settings file is reported instead of being treated as empty (saving would have erased the saved connections).
 - Colour codes are no longer written when output is piped to a file (picocolors enables colour on every Windows process).

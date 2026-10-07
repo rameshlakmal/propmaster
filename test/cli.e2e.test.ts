@@ -66,6 +66,11 @@ describe('propmaster CLI', () => {
     expect(stop.out).toContain('total=84.50');
     expect(stop.out).toContain(' 4 changes · 4 tables · 3 inserts · 1 update');
 
+    const id = /Stopped session #(\d+)/.exec(stop.out)![1]!;
+    expect((await cli(['record', 'rename', id, '1', 'Place', 'the', 'order'])).out).toContain(`✔ Renamed STEP 1 of session #${id} to Place the order`);
+    expect((await cli(['record', 'show'])).out).toMatch(/ STEP 1 {2}Place the order +4 changes/);
+    expect((await cli(['record', 'rename', id, 'one', 'x'])).err).toContain('"one" is not a step number.');
+
     const filtered = await cli(['record', 'show', '--table', 'orders,payments', '--op', 'insert']);
     expect(filtered.out).toContain('2 changes hidden by filters');
     expect(filtered.out).not.toContain('│ update');

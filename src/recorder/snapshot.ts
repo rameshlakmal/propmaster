@@ -359,6 +359,15 @@ export async function listSnapshots(identity: string): Promise<SessionSummary[]>
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
 }
 
+export async function renameSnapshotStep(id: string, seq: number, name: string): Promise<void> {
+  const session = await readSession(id);
+  if (!session) throw new UserError(`There is no session ${id}.`, 'See `propmaster record list`.');
+  const step = session.recording.steps.find((s) => s.seq === seq);
+  if (!step) throw new UserError(`Session ${id} has no step ${seq}.`, `Its steps are ${session.recording.steps.map((s) => s.seq).join(', ')}.`);
+  step.name = name;
+  await writeJson(sessionFile(id), session);
+}
+
 export async function deleteSnapshot(id: string): Promise<void> {
   if (!(await readSession(id))) throw new UserError(`There is no snapshot session ${id}.`);
   if ((await readActiveId()) === id) throw new UserError(`Snapshot session ${id} is still recording.`, 'Stop it first: `propmaster record stop`.');

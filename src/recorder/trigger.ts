@@ -83,6 +83,7 @@ export async function step(db: Db, name: string): Promise<number> {
 async function isCurrent(db: Db): Promise<boolean> {
   const { rows } = await db.query<{ ok: boolean }>(`
     SELECT to_regprocedure('_propmaster.set_paused(boolean)') IS NOT NULL
+       AND to_regclass('_propmaster.step_names') IS NOT NULL
        AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '_propmaster.sessions'::regclass AND attname = 'auto_split_ms') AS ok`);
   return rows[0]!.ok;
 }
@@ -152,7 +153,8 @@ export async function includeTable(db: Db, table: string): Promise<void> {
   await db.query('SELECT _propmaster.include_table($1::regclass)', [table]);
 }
 
-export async function listSessions(db: Db, limit = 20): Promise<SessionSummary[]> {
+/** The newest sessions first; `limit` null for all of them. */
+export async function listSessions(db: Db, limit: number | null = 20): Promise<SessionSummary[]> {
   await requireInstalled(db);
   const { rows } = await db.query<SessionSummary>(`
     SELECT s.id::text AS id, 'trigger' AS mode, s.name,
@@ -162,6 +164,12 @@ export async function listSessions(db: Db, limit = 20): Promise<SessionSummary[]
      ORDER BY s.id DESC
      LIMIT $1`, [limit]);
   return rows;
+}
+
+/** Deletes one stopped session and its changes. */
+export async function countSessions(db: Db): Promise<number> {
+  await requireInstalled(db);
+  return (await db.query<{ n: number }>('SELECT count(*)::int AS n FROM _propmaster.sessions')).rows[0]!.n;
 }
 
 /** Deletes one stopped session and its changes. */
@@ -233,5 +241,28 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
     columns: await loadColumns(db, tables),
     notes: [],
   });
-  return autoSplitMs ? splitSteps(rec, autoSplitMs) : rec;
+  if (!autoSplitMs) return rec;
+  const hasNames = (await db.query<{ ok: boolean }>("SELECT to_regclass('_propmaster.step_names') IS NOT NULL AS ok")).rows[0]!.ok;
+  const { rows: names } = hasNames
+    ? await db.query<{ id: number; name: string }>('SELECT first_change_id::int AS id, name FROM _propmaster.step_names WHERE session_id = $1', [session.id])
+    : { rows: [] };
+  return splitSteps(rec, autoSplitMs, new Map(names.map((n) => [n.id, n.name])));
+}
+
+/** Gives a step a new name, typed or auto, while recording or afterwards. */
+export async function renameStep(db: Db, sessionId: string, seq: number, name: string): Promise<void> {
+  const rec = await getRecording(db, sessionId);
+  if (!rec || rec.id !== sessionId) throw new UserError(`There is no session ${sessionId}.`, 'See `propmaster record list`.');
+  const step = rec.steps.find((s) => s.seq === seq);
+  if (!step) throw new UserError(`Session ${sessionId} has no step ${seq}.`, `Its steps are ${rec.steps.map((s) => s.seq).join(', ')}.`);
+
+  const key = step.renameKey ?? { seq };
+  if ('seq' in key) {
+    await db.query('UPDATE _propmaster.steps SET name = $3 WHERE session_id = $1 AND seq = $2', [sessionId, key.seq, name]);
+  } else {
+    await requireCurrent(db);
+    await db.query(`
+      INSERT INTO _propmaster.step_names (session_id, first_change_id, name) VALUES ($1, $2, $3)
+      ON CONFLICT (session_id, first_change_id) DO UPDATE SET name = excluded.name`, [sessionId, key.firstChangeId, name]);
+  }
 }

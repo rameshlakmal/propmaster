@@ -193,13 +193,13 @@ function Recorder({ status, onChange, onStopped, floating }: { status: Status; o
           ? auto
             ? <EmptyState icon={<Plus size={32} />} title="Waiting for the first action">Do something in the app. Each action appears here as a step, named after what it changed.</EmptyState>
             : <EmptyState icon={<Plus size={32} />} title="No steps yet">Add your first step above, then do it in the app. Changes appear here as they happen.</EmptyState>
-          : <Timeline steps={live.data.steps} currentSeq={current.seq} />
+          : <Timeline steps={live.data.steps} currentSeq={current.seq} sessionId={active.id} onRenamed={() => void live.refresh()} />
       )}
     </Box>
   );
 }
 
-function StoppedView({ stopped, onAgain }: { stopped: Recording; onAgain: () => void }) {
+function StoppedView({ stopped, onAgain, onRenamed }: { stopped: Recording; onAgain: () => void; onRenamed: () => void }) {
   return (
     <Box>
       <Card size="3" mb="5">
@@ -218,7 +218,7 @@ function StoppedView({ stopped, onAgain }: { stopped: Recording; onAgain: () => 
           </Flex>
         </Flex>
       </Card>
-      <Timeline steps={stopped.steps} />
+      <Timeline steps={stopped.steps} sessionId={stopped.id} onRenamed={onRenamed} />
     </Box>
   );
 }
@@ -252,7 +252,8 @@ export function RecordPage({ status, statusError, onChange, stopped, onStopped, 
       {status.active
         ? <Recorder key={status.active.id} status={status} onChange={onChange} onStopped={onStopped} floating={floating} />
         : stopped
-          ? <StoppedView stopped={stopped} onAgain={() => onStopped(null)} />
+          ? <StoppedView stopped={stopped} onAgain={() => onStopped(null)}
+              onRenamed={() => void api<Recording>('GET', `/sessions/${stopped.id}`).then(onStopped)} />
           : <StartForm installed={status.installed} onStarted={() => { onStopped(null); onChange(); }} />}
     </Box>
   );

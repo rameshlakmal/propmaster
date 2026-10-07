@@ -76,3 +76,55 @@ describe('auto steps', () => {
     await expect(sessions.start(db, identity, 'x', { autoSteps: Number.NaN })).rejects.toThrow('between 0.5 and 600 seconds');
   });
 });
+
+describe('renaming steps', () => {
+  it('renames typed steps, and auto steps by their first change, during and after recording', async () => {
+    await sessions.start(db, identity, 'rename me', { autoSteps: GAP });
+    await db.query('SELECT place_order(1, 3, 2)');
+    await quiet();
+    await sessions.step(db, identity, 'Cancel it');
+    await db.query("UPDATE orders SET status = 'CANCELLED' WHERE id = 1");
+    await quiet();
+    await db.query("INSERT INTO customers (email, name) VALUES ('r@example.com', 'R')");
+
+    // While recording: rename the first auto step.
+    const live = await sessions.load(db, identity);
+    await sessions.renameStep(db, live.id, 1, '  Place an   order  ');
+    await db.query("UPDATE customers SET name = 'R2' WHERE email = 'r@example.com'"); // the last step grows; names stay put
+
+    const rec = await sessions.stop(db, identity);
+    await sessions.renameStep(db, rec.id, 2, 'Cancel the order');
+    await sessions.renameStep(db, rec.id, 3, 'Sign up');
+    await sessions.renameStep(db, rec.id, 3, 'Sign up a customer'); // again: replaces the name
+
+    const after = await sessions.load(db, identity, rec.id);
+    expect(after.steps.map((s) => [s.seq, s.name, s.auto, s.changes.length])).toEqual([
+      [1, 'Place an order', false, 4],
+      [2, 'Cancel the order', false, 1],
+      [3, 'Sign up a customer', false, 2],
+    ]);
+  });
+
+  it('renames steps of typed sessions, and explains mistakes', async () => {
+    await sessions.start(db, identity, 'typed');
+    await sessions.step(db, identity, 'Ordr');
+    const rec = await sessions.stop(db, identity);
+    await sessions.renameStep(db, rec.id, 1, 'Order');
+    expect((await sessions.load(db, identity, rec.id)).steps.map((s) => s.name)).toEqual(['(before first step)', 'Order']);
+
+    await expect(sessions.renameStep(db, rec.id, 7, 'x')).rejects.toThrow(`Session ${rec.id} has no step 7.`);
+    await expect(sessions.renameStep(db, '999', 1, 'x')).rejects.toThrow('There is no session 999.');
+    await expect(sessions.renameStep(db, rec.id, 1, '   ')).rejects.toThrow('A step needs a name.');
+    await expect(sessions.renameStep(db, rec.id, 1, 'x'.repeat(201))).rejects.toThrow('at most 200 characters');
+    await expect(sessions.renameStep(db, rec.id, Number.NaN, 'x')).rejects.toThrow('is not a step number');
+  });
+
+  it('forgets renamed auto steps when their session is deleted', async () => {
+    await sessions.start(db, identity, 'gone', { autoSteps: GAP });
+    await db.query('SELECT place_order(1, 3, 2)');
+    const rec = await sessions.stop(db, identity);
+    await sessions.renameStep(db, rec.id, 1, 'Order');
+    await sessions.remove(db, rec.id);
+    expect((await db.query('SELECT count(*)::int AS n FROM _propmaster.step_names')).rows[0].n).toBe(0);
+  });
+});

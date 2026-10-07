@@ -42,6 +42,11 @@ export interface Step {
   markers?: Marker[];
   /** Named by Propmaster from its changes (auto steps), not typed by the tester. */
   auto?: boolean;
+  /**
+   * Auto-step sessions only: where a new name for this step is kept. A step named by the tester lives in
+   * its own row (`seq` of that row); a step worked out from the changes is renamed by its first change.
+   */
+  renameKey?: { seq: number } | { firstChangeId: number };
 }
 
 export interface Column {

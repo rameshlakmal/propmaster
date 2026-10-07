@@ -32,8 +32,11 @@ function placeMarkers(steps: Step[], markers: Marker[]): void {
   }
 }
 
-/** The recording with its steps split at quiet gaps and named. Recordings without auto steps pass through. */
-export function splitSteps(rec: Recording, gapMs: number): Recording {
+/**
+ * The recording with its steps split at quiet gaps and named. `renamed` holds names the tester gave
+ * auto steps afterwards, by the id of the step's first change.
+ */
+export function splitSteps(rec: Recording, gapMs: number, renamed: ReadonlyMap<number, string> = new Map()): Recording {
   const steps: Step[] = [];
   const markers = rec.steps.flatMap((s) => s.markers ?? []);
 
@@ -43,17 +46,19 @@ export function splitSteps(rec: Recording, gapMs: number): Recording {
 
     if (groups.length === 0) {
       // A typed step with nothing yet keeps its name; an empty placeholder is kept so markers have a home.
-      if (typed || steps.length === 0) steps.push({ seq: 0, name: raw.name, startedAt: raw.startedAt, changes: [], auto: !typed });
+      if (typed || steps.length === 0) steps.push({ seq: 0, name: raw.name, startedAt: raw.startedAt, changes: [], auto: !typed, renameKey: { seq: raw.seq } });
       continue;
     }
     groups.forEach((changes, i) => {
       const named = typed && i === 0;
+      const given = named ? undefined : renamed.get(changes[0]!.id);
       steps.push({
         seq: 0,
-        name: named ? raw.name : describeChanges(changes),
+        name: named ? raw.name : given ?? describeChanges(changes),
         startedAt: named ? raw.startedAt : changes[0]!.changedAt,
         changes,
-        auto: !named,
+        auto: !named && given === undefined,
+        renameKey: named ? { seq: raw.seq } : { firstChangeId: changes[0]!.id },
       });
     });
   }

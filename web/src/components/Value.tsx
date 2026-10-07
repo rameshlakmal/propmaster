@@ -26,7 +26,11 @@ function readableTime(raw: string, withTime: boolean): string | null {
  * `sql` is the value as the server wrote it ('text', 84.50, NULL). `exact` shows it in full and unchanged
  * (for the expanded row), apart from dropping the quotes around text.
  */
-export function Value({ sql, kind, max = DEFAULT_MAX, exact = false }: { sql: string | null; kind: ValueKind | null; max?: number; exact?: boolean }) {
+export function Value({ sql, kind, max = DEFAULT_MAX, exact = false, other }: {
+  sql: string | null; kind: ValueKind | null; max?: number; exact?: boolean;
+  /** The value on the other side of an update: times that would read the same are shown exactly. */
+  other?: string | null;
+}) {
   if (sql === null || kind === null) return null;
   const limit = exact ? Infinity : max;
 
@@ -40,11 +44,15 @@ export function Value({ sql, kind, max = DEFAULT_MAX, exact = false }: { sql: st
     case 'timestamp':
     case 'date': {
       const raw = unquote(sql);
-      const nice = exact ? null : readableTime(raw, kind === 'timestamp');
-      return <span className="v-time" title={raw}>{nice ?? raw}</span>;
+      const readable = (v: string) => readableTime(v, kind === 'timestamp');
+      const same = other != null && readable(unquote(other)) === readable(raw);
+      // Within the same second, only the exact time shows the difference: "16:28:30.666613+00:00".
+      const shown = exact ? raw : same ? raw.replace(/^\d{4}-\d\d-\d\d[T ]/, '') : readable(raw) ?? raw;
+      return <span className="v-time" title={raw}>{shown}</span>;
     }
     case 'json':
-      return <span className="v-json" title={sql.length > limit ? sql : undefined}>{shorten(sql, limit)}</span>;
+      // Indented by the server; kept as a block so nested objects and arrays stay readable.
+      return <pre className={`v-json-block${exact ? ' v-json-full' : ''}`} tabIndex={0}>{sql}</pre>;
     case 'text': {
       const text = unquote(sql);
       if (text === '') return <span className="v-null">empty</span>;

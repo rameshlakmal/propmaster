@@ -147,7 +147,7 @@ describe('recording through the web app', () => {
   });
 
   it('lists sessions and explains a missing one', async () => {
-    expect((await call('GET', '/api/sessions')).data[0]).toMatchObject({ id, name: 'UI checkout', changeCount: 4 });
+    expect((await call('GET', '/api/sessions')).data).toMatchObject({ total: 1, page: 1, pageSize: 20, sessions: [{ id, name: 'UI checkout', changeCount: 4 }] });
     const missing = await call('GET', '/api/sessions/999');
     expect(missing.status).toBe(400);
     expect(missing.data.error.message).toBe('There is no session 999.');
@@ -177,9 +177,16 @@ describe('recording through the web app', () => {
     expect((await call('PUT', '/api/rules', { path: join(dir, 'notes.txt'), content })).status).toBe(400);
   });
 
+  it('renames a step', async () => {
+    expect((await call('PUT', `/api/sessions/${id}/steps/1`, { name: 'Place the order' })).data).toEqual({ ok: true });
+    expect((await call('GET', `/api/sessions/${id}`)).data.steps.find((s: { seq: number }) => s.seq === 1).name).toBe('Place the order');
+    expect((await call('PUT', `/api/sessions/${id}/steps/1`, { name: '' })).status).toBe(400);
+    expect((await call('PUT', `/api/sessions/${id}/steps/9`, { name: 'x' })).data.error.message).toBe(`Session ${id} has no step 9.`);
+  });
+
   it('deletes a stopped session', async () => {
     expect((await call('DELETE', `/api/sessions/${id}`)).data).toEqual({ ok: true });
-    expect((await call('GET', '/api/sessions')).data).toEqual([]);
+    expect((await call('GET', '/api/sessions')).data).toMatchObject({ total: 0, sessions: [] });
   });
 });
 

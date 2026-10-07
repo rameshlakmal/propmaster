@@ -110,8 +110,16 @@ const routes: [string, RegExp, Handler][] = [
   }],
   ['POST', /^\/api\/record\/stop$/, () => withActive(async (db, identity) => toView(await sessions.stop(db, identity)))],
 
-  ['GET', /^\/api\/sessions$/, () => withActive((db, identity) => sessions.list(db, identity))],
+  ['GET', /^\/api\/sessions$/, (req) => {
+    const page = Math.max(1, Math.floor(Number(req.query.get('page') ?? 1)) || 1);
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(req.query.get('pageSize') ?? 20)) || 20));
+    return withActive(async (db, identity) => ({ ...(await sessions.page(db, identity, (page - 1) * pageSize, pageSize)), page, pageSize }));
+  }],
   ['GET', /^\/api\/sessions\/([^/]+)$/, (req) => withActive(async (db, identity) => toView(await sessions.load(db, identity, req.params[0])))],
+  ['PUT', /^\/api\/sessions\/([^/]+)\/steps\/(\d+)$/, async (req) => {
+    const { name } = await req.body();
+    return withActive(async (db) => { await sessions.renameStep(db, req.params[0]!, Number(req.params[1]), str(name, 'name')); return { ok: true }; });
+  }],
   ['DELETE', /^\/api\/sessions\/([^/]+)$/, (req) => withActive(async (db) => { await sessions.remove(db, req.params[0]!); return { ok: true }; })],
 
   ['GET', /^\/api\/rules$/, () => withActive(async (_db, _identity, profile) => {

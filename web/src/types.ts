@@ -57,6 +57,13 @@ export interface SessionSummary {
   changeCount: number;
 }
 
+export interface SessionPage {
+  sessions: SessionSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface ColumnChange {
   column: string;
   /** As written in SQL: 'text', 84.50, NULL. */
@@ -65,6 +72,8 @@ export interface ColumnChange {
   changed: boolean;
   beforeKind: ValueKind | null;
   afterKind: ValueKind | null;
+  /** An updated JSON value: the paths inside it that changed. */
+  jsonChanges?: { path: string; before: string | null; after: string | null }[];
 }
 
 export type ValueKind = 'null' | 'text' | 'number' | 'boolean' | 'timestamp' | 'date' | 'json';

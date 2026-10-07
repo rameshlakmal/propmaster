@@ -163,6 +163,13 @@ describe('pause, resume and flag in snapshot mode', () => {
     // The markers survive the trip through the session file.
     const reloaded = await sessions.load(reader, identity, rec.id);
     expect(reloaded.steps[2]!.markers![1]!.at).toBeInstanceOf(Date);
+
+    // Snapshot steps can be renamed afterwards too; the file keeps everything else.
+    await sessions.renameStep(reader, rec.id, 2, 'Cancel the order');
+    const renamed = await sessions.load(reader, identity, rec.id);
+    expect(renamed.steps.map((s) => s.name)).toEqual(['(before first step)', 'Place order', 'Cancel the order']);
+    expect(renamed.steps[2]!.markers).toHaveLength(2);
+    await expect(sessions.renameStep(reader, 's99', 1, 'x')).rejects.toThrow('There is no session s99.');
   });
 
   it('stops a paused session without comparing again', async () => {

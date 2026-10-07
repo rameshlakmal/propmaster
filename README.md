@@ -78,7 +78,7 @@ npm run ui           # opens Propmaster in your browser
    - **Pop out** (Chrome and Edge) opens a small floating window that stays on top of the app you're testing: add steps, pause, flag and stop from there, and watch the latest changes arrive.
    - **Pause** while you do setup that isn't part of the test; nothing is recorded until you resume.
    - **Flag** a step when something looks wrong, with a note. Flags show in the timeline and in every export.
-3. **Sessions:** open any recording to search it, filter by table or operation, and export it (HTML, Markdown, SQL checks). Each change is laid out as labelled fields: the new values of an insert, *old → new* for an update, and what a deleted row held, with text unquoted and times in your local format. Click a change for every column, exactly as stored.
+3. **Sessions:** the list is paged (20 a page); tick sessions to delete several at once, or use the bin on a row. Open any recording to rename a step (the pencil next to its name), search it, filter by table or operation, and export it (HTML, Markdown, SQL checks). Each change is laid out as labelled fields: the new values of an insert, *old → new* for an update, and what a deleted row held, with text unquoted and times in your local format. JSON keeps its structure: indented, and for an update the paths that changed (`[0].goodsWeight 1000 → 500`), with the full JSON before and after one click away. Click a change for every column, exactly as stored.
 4. **Rules:** open your rules file, edit it, and run it against a session.
 
 ![Recording live in the web app](docs/images/web-app-recording.png)
@@ -141,6 +141,7 @@ Not sure what your DB user is allowed to do? Run `propmaster doctor`.
 | `record show [id]` | Prints a session's timeline (default: the latest). |
 | `record export [id]` | Writes `--format html` (default), `md` or `sql`. See below. |
 | `record check <rules.sql> [id]` | Checks business rules against the rows a session touched. See below. |
+| `record rename <id> <step> <name>` | Renames a step, while recording or afterwards (typed and auto steps). |
 | `record delete <id>` / `prune --older-than "7 days"` | Housekeeping. |
 | `record exclude <table…>` / `include <table…>` | Stop or resume watching busy tables such as `sessions` or `audit_log`. |
 

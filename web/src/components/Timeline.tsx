@@ -1,15 +1,18 @@
-import { Badge, Box, Card, Flex, Heading, Table, Text } from '@radix-ui/themes';
-import { Flag, Pause, Play } from '@phosphor-icons/react';
-import { Fragment, useState, type ReactNode } from 'react';
+import { Badge, Box, Button, Card, Flex, Heading, IconButton, Table, Text, TextField } from '@radix-ui/themes';
+import { Flag, Pause, PencilSimple, Play } from '@phosphor-icons/react';
+import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { api } from '../api';
+import { toError } from '../hooks';
+import type { ApiError } from '../types';
 import { Value } from './Value';
 import type { Change, Marker, Step } from '../types';
 
 /** How many fields an insert or delete shows before "+N more"; the expanded row has them all. */
 const FIELD_LIMIT = 8;
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
   return (
-    <div className="field">
+    <div className={`field${wide ? ' field-wide' : ''}`}>
       <span className="field-label" title={label}>{label}</span>
       <span className="field-value">{children}</span>
     </div>
@@ -31,12 +34,38 @@ function ChangeSummary({ change }: { change: Change }) {
   if (change.op === 'UPDATE') {
     return (
       <div className="fields fields-wide">
-        {change.columns.map((c) => (
+        {change.columns.map((c) => c.beforeKind === 'json' || c.afterKind === 'json' ? (
+          // What changed inside the JSON, path by path; the whole value before and after on request.
+          <Field key={c.column} label={c.column} wide>
+            {c.jsonChanges && c.jsonChanges.length > 0 && (
+              <span className="json-changes">
+                {c.jsonChanges.map((j) => (
+                  <span key={j.path} className="json-change">
+                    <span className="json-path">{j.path}</span>
+                    <span className="was">{j.before ?? 'missing'}</span>
+                    <span className="arrow" aria-hidden>→</span>
+                    <span className="sr-only"> changed to </span>
+                    <span className="now">{j.after ?? 'missing'}</span>
+                  </span>
+                ))}
+              </span>
+            )}
+            <details className="json-full" onClick={(e) => e.stopPropagation()}>
+              <summary>Full JSON before and after</summary>
+              <span className="json-pair">
+                <span className="json-pair-label">before</span>
+                <Value sql={c.before} kind={c.beforeKind} />
+                <span className="json-pair-label">after</span>
+                <Value sql={c.after} kind={c.afterKind} />
+              </span>
+            </details>
+          </Field>
+        ) : (
           <Field key={c.column} label={c.column}>
-            <span className="was"><Value sql={c.before} kind={c.beforeKind} max={32} /></span>
+            <span className="was"><Value sql={c.before} kind={c.beforeKind} max={32} other={c.after} /></span>
             <span className="arrow" aria-hidden>→</span>
             <span className="sr-only"> changed to </span>
-            <span className="now"><Value sql={c.after} kind={c.afterKind} max={32} /></span>
+            <span className="now"><Value sql={c.after} kind={c.afterKind} max={32} other={c.before} /></span>
           </Field>
         ))}
       </div>
@@ -52,7 +81,7 @@ function ChangeSummary({ change }: { change: Change }) {
     <div className={`fields${removed ? ' fields-removed' : ''}`}>
       {removed && <span className="fields-note">Row removed. It held:</span>}
       {shown.map((c) => (
-        <Field key={c.column} label={c.column}>
+        <Field key={c.column} label={c.column} wide={(removed ? c.beforeKind : c.afterKind) === 'json'}>
           {removed ? <Value sql={c.before} kind={c.beforeKind} max={40} /> : <Value sql={c.after} kind={c.afterKind} max={40} />}
         </Field>
       ))}
@@ -79,7 +108,7 @@ function ChangeDetail({ change }: { change: Change }) {
           {change.columns.map((c) => (
             <Table.Row key={c.column}>
               <Table.RowHeaderCell><Text weight="medium" size="2">{c.column}</Text></Table.RowHeaderCell>
-              {showBefore && <Table.Cell className={`cell-wrap ${c.changed ? 'was' : ''}`}><Value sql={c.before} kind={c.beforeKind} exact /></Table.Cell>}
+              {showBefore && <Table.Cell className={`cell-wrap ${c.changed && c.beforeKind !== 'json' ? 'was' : ''}`}><Value sql={c.before} kind={c.beforeKind} exact /></Table.Cell>}
               {showAfter && <Table.Cell className={`cell-wrap ${c.changed ? 'now' : ''}`}><Value sql={c.after} kind={c.afterKind} exact /></Table.Cell>}
             </Table.Row>
           ))}
@@ -160,8 +189,64 @@ function Markers({ markers }: { markers: Marker[] }) {
   );
 }
 
-/** Steps with their changes. `currentSeq` highlights the step being recorded. */
-export function Timeline({ steps, currentSeq }: { steps: Step[]; currentSeq?: number }) {
+/** A step's name, with a pencil to rename it. Enter saves, Escape cancels. */
+function StepName({ step, sessionId, onRenamed }: { step: Step; sessionId?: string; onRenamed?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(step.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || name.trim() === step.name) { setEditing(false); return; }
+    setBusy(true); setError(null);
+    try {
+      await api('PUT', `/sessions/${encodeURIComponent(sessionId!)}/steps/${step.seq}`, { name });
+      setEditing(false);
+      onRenamed?.();
+    } catch (err) {
+      setError(toError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <Flex align="center" gap="1" minWidth="0">
+        <Heading as="h3" size="3" weight="medium">{step.name}</Heading>
+        {sessionId && (
+          <IconButton size="1" variant="ghost" color="gray" className="rename-button" aria-label={`Rename step ${step.seq}`}
+            onClick={() => { setName(step.name); setEditing(true); }}>
+            <PencilSimple />
+          </IconButton>
+        )}
+      </Flex>
+    );
+  }
+  return (
+    <form onSubmit={save} style={{ flex: 1, minWidth: 240 }}>
+      <Flex gap="2" align="center">
+        <Box flexGrow="1">
+          <TextField.Root ref={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={200} aria-label={`New name for step ${step.seq}`}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setEditing(false); setError(null); } }} />
+        </Box>
+        <Button type="submit" size="2" loading={busy} disabled={!name.trim()}>Save</Button>
+        <Button type="button" size="2" variant="soft" color="gray" onClick={() => { setEditing(false); setError(null); }}>Cancel</Button>
+      </Flex>
+      {error && <Text as="p" size="1" color="red" mt="1">{error.message}</Text>}
+    </form>
+  );
+}
+
+/**
+ * Steps with their changes. `currentSeq` highlights the step being recorded. With `sessionId`, each
+ * step name can be renamed; `onRenamed` is called after a rename so the caller can reload.
+ */
+export function Timeline({ steps, currentSeq, sessionId, onRenamed }: { steps: Step[]; currentSeq?: number; sessionId?: string; onRenamed?: () => void }) {
   const shown = steps.filter((s) => !(s.seq === 0 && s.changes.length === 0 && s.markers.length === 0));
   return (
     <Flex direction="column" gap="5">
@@ -170,7 +255,7 @@ export function Timeline({ steps, currentSeq }: { steps: Step[]; currentSeq?: nu
           <Flex justify="between" align="center" mb={step.changes.length || step.markers.length ? '3' : '0'} gap="3" wrap="wrap">
             <Flex align="center" gap="3">
               <Badge color={step.seq === currentSeq ? 'cyan' : 'gray'} variant="soft" size="2">Step {step.seq}</Badge>
-              <Heading as="h3" size="3" weight="medium">{step.name}</Heading>
+              <StepName key={step.seq} step={step} sessionId={sessionId} onRenamed={onRenamed} />
               {step.auto && <Badge color="gray" variant="outline" title="Named by Propmaster from its changes">auto</Badge>}
               {step.seq === currentSeq && <Text size="1" color="cyan">now</Text>}
               {step.markers.some((m) => m.kind === 'flag') && <Badge color="amber" variant="soft"><Flag weight="fill" size={12} /> flagged</Badge>}
