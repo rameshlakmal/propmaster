@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+.propmaster/
+demo-report.*
+demo-checks.sql
+propmaster-session-*

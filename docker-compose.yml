@@ -1,0 +1,21 @@
+name: propmaster
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: propmaster
+      POSTGRES_PASSWORD: propmaster
+      POSTGRES_DB: qa_shop
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./docker/00-test-db.sql:/docker-entrypoint-initdb.d/00-test-db.sql:ro
+      - ./demo/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./demo/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      # TCP, not the socket: the temporary server that runs the init scripts is socket-only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U propmaster -d qa_shop"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

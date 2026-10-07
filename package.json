@@ -1,0 +1,56 @@
+{
+  "name": "propmaster",
+  "version": "0.1.0",
+  "description": "Test-data toolkit for QA engineers: record, find, seed and clean database state.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "propmaster": "dist/cli.js",
+    "prop": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "sql"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "propmaster": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait",
+    "bench": "tsx scripts/bench.ts",
+    "demo": "tsx scripts/demo.ts",
+    "shop": "tsx demo/shop.ts",
+    "gif": "tsx scripts/gif.ts"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "pg": "^8.23.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rameshlakmal/propmaster.git"
+  },
+  "keywords": [
+    "postgresql",
+    "qa",
+    "testing",
+    "test-data",
+    "database-testing",
+    "audit-trigger",
+    "cli"
+  ]
+}

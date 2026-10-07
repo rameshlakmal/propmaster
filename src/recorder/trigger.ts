@@ -1,0 +1,176 @@
+// Trigger mode: the recorder lives in the database (sql/recorder.sql) and captures every change as it happens.
+import { readFile } from 'node:fs/promises';
+import type { Db } from '../core/db.js';
+import { UserError } from '../core/errors.js';
+import { loadColumns } from './catalog.js';
+import { orderColumns, tableKey, type Change, type Recording, type SessionSummary, type Step } from './types.js';
+
+const INSTALL_SQL = new URL('../../sql/recorder.sql', import.meta.url);
+
+export interface ActiveSession {
+  id: string;
+  name: string;
+  startedAt: Date;
+  stepSeq: number;
+  stepName: string;
+}
+
+export interface TriggerStatus {
+  installed: boolean;
+  watchedTables: number;
+  excludedTables: string[];
+  active: ActiveSession | null;
+}
+
+/** Installs or upgrades the recorder; returns how many tables got a trigger. */
+export async function install(db: Db): Promise<number> {
+  const sql = await readFile(INSTALL_SQL, 'utf8');
+  await db.query('BEGIN');
+  try {
+    await db.query(sql);
+    const { rows } = await db.query<{ n: number }>('SELECT _propmaster.attach_triggers() AS n');
+    // Idle unless a session is running (an upgrade can happen mid-session).
+    await db.query('SELECT _propmaster.set_triggers_enabled((SELECT session_id IS NOT NULL FROM _propmaster.state))');
+    await db.query('COMMIT');
+    return rows[0]!.n;
+  } catch (err) {
+    await db.query('ROLLBACK');
+    throw err;
+  }
+}
+
+export async function uninstall(db: Db): Promise<void> {
+  await db.query('DROP SCHEMA IF EXISTS _propmaster CASCADE');
+}
+
+export async function isInstalled(db: Db): Promise<boolean> {
+  const { rows } = await db.query<{ ok: boolean }>("SELECT to_regnamespace('_propmaster') IS NOT NULL AS ok");
+  return rows[0]!.ok;
+}
+
+async function requireInstalled(db: Db): Promise<void> {
+  if (!(await isInstalled(db))) {
+    throw new UserError(
+      'The recorder is not installed in this database.',
+      'Run `propmaster install`, or use `propmaster record start --snapshot` if you only have read access.');
+  }
+}
+
+export async function start(db: Db, name: string): Promise<string> {
+  await requireInstalled(db);
+  const { rows } = await db.query<{ id: string }>('SELECT _propmaster.start($1)::text AS id', [name]);
+  return rows[0]!.id;
+}
+
+export async function step(db: Db, name: string): Promise<number> {
+  await requireInstalled(db);
+  const { rows } = await db.query<{ seq: number }>('SELECT _propmaster.step($1) AS seq', [name]);
+  return rows[0]!.seq;
+}
+
+export async function stop(db: Db): Promise<string> {
+  await requireInstalled(db);
+  const { rows } = await db.query<{ id: string }>('SELECT _propmaster.stop()::text AS id');
+  return rows[0]!.id;
+}
+
+export async function status(db: Db): Promise<TriggerStatus> {
+  if (!(await isInstalled(db))) return { installed: false, watchedTables: 0, excludedTables: [], active: null };
+
+  const { rows: [counts] } = await db.query<{ n: number }>('SELECT _propmaster.watched_table_count() AS n');
+  const { rows: excluded } = await db.query<{ name: string }>(
+    "SELECT format('%s.%s', table_schema, table_name) AS name FROM _propmaster.excluded_tables ORDER BY 1");
+  const { rows: [active] } = await db.query<ActiveSession>(`
+    SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", st.seq AS "stepSeq", st.name AS "stepName"
+      FROM _propmaster.state x
+      JOIN _propmaster.sessions s ON s.id = x.session_id
+      JOIN _propmaster.steps st ON st.id = x.step_id`);
+
+  return {
+    installed: true,
+    watchedTables: counts!.n,
+    excludedTables: excluded.map((r) => r.name),
+    active: active ?? null,
+  };
+}
+
+/** Stops watching a table (and removes its triggers). Accepts "table" or "schema.table". */
+export async function excludeTable(db: Db, table: string): Promise<void> {
+  await requireInstalled(db);
+  await db.query('SELECT _propmaster.exclude_table($1::regclass)', [table]);
+}
+
+export async function includeTable(db: Db, table: string): Promise<void> {
+  await requireInstalled(db);
+  await db.query('SELECT _propmaster.include_table($1::regclass)', [table]);
+}
+
+export async function listSessions(db: Db, limit = 20): Promise<SessionSummary[]> {
+  await requireInstalled(db);
+  const { rows } = await db.query<SessionSummary>(`
+    SELECT s.id::text AS id, 'trigger' AS mode, s.name,
+           s.started_at AS "startedAt", s.stopped_at AS "stoppedAt",
+           (SELECT count(*)::int FROM _propmaster.changes c WHERE c.session_id = s.id) AS "changeCount"
+      FROM _propmaster.sessions s
+     ORDER BY s.id DESC
+     LIMIT $1`, [limit]);
+  return rows;
+}
+
+/** Deletes one stopped session and its changes. */
+export async function deleteSession(db: Db, id: string): Promise<void> {
+  await requireInstalled(db);
+  await db.query('SELECT _propmaster.delete_session($1::bigint)', [id]);
+}
+
+/** Deletes stopped sessions older than the interval (a Postgres interval such as '7 days'). */
+export async function prune(db: Db, olderThan: string): Promise<number> {
+  await requireInstalled(db);
+  const { rows } = await db.query<{ n: number }>('SELECT _propmaster.prune($1::interval) AS n', [olderThan]);
+  return rows[0]!.n;
+}
+
+/** Loads a session with its steps and changes. Without an id, loads the most recent session. */
+export async function getRecording(db: Db, sessionId?: string): Promise<Recording | null> {
+  await requireInstalled(db);
+
+  const { rows: [session] } = await db.query<{
+    id: string; name: string; startedAt: Date; stoppedAt: Date | null; startedBy: string; database: string;
+  }>(`
+    SELECT s.id::text AS id, s.name, s.started_at AS "startedAt", s.stopped_at AS "stoppedAt",
+           s.started_by AS "startedBy", current_database() AS database
+      FROM _propmaster.sessions s
+     WHERE $1::bigint IS NULL OR s.id = $1::bigint
+     ORDER BY s.id DESC
+     LIMIT 1`, [sessionId ?? null]);
+  if (!session) return null;
+
+  const { rows: steps } = await db.query<Omit<Step, 'changes'> & { id: string }>(`
+    SELECT id::text AS id, seq, name, started_at AS "startedAt"
+      FROM _propmaster.steps
+     WHERE session_id = $1
+     ORDER BY seq`, [session.id]);
+
+  const { rows: changes } = await db.query<Change & { stepId: string }>(`
+    SELECT id::int AS id, step_id::text AS "stepId",
+           table_schema AS "tableSchema", table_name AS "tableName", op,
+           row_key AS "rowKey", old_values AS "oldValues", new_values AS "newValues",
+           changed_at AS "changedAt", txid::text AS txid, db_user AS "dbUser", app_name AS "appName",
+           host(client_addr) AS "clientAddr"
+      FROM _propmaster.changes
+     WHERE session_id = $1
+     ORDER BY id`, [session.id]);
+
+  const tables = [...new Set(changes.map((c) => tableKey(c.tableSchema, c.tableName)))];
+
+  return orderColumns({
+    ...session,
+    mode: 'trigger',
+    steps: steps.map(({ id, ...s }) => ({
+      ...s,
+      changes: changes.filter((c) => c.stepId === id).map(({ stepId: _, ...c }) => c),
+    })),
+    columns: await loadColumns(db, tables),
+    notes: [],
+  });
+}
