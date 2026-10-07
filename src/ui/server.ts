@@ -146,8 +146,9 @@ const routes: [string, RegExp, Handler][] = [
   })],
   ['PUT', /^\/api\/rules$/, async (req) => {
     const { path, content } = await req.body();
-    const file = resolve(str(path, 'path'));
-    if (extname(file).toLowerCase() !== '.sql') throw new UserError('Rules files must end in .sql.');
+    // Windows' "Copy as path" wraps the path in quotes: accept it as pasted.
+    const file = resolve(str(path, 'path').trim().replace(/^(["'])(.*)\1$/, '$2').trim());
+    if (extname(file).toLowerCase() !== '.sql') throw new UserError(`Rules files must end in .sql, and this one doesn't: ${file}`);
     if (typeof content === 'string') {
       parseRules(content, file); // refuse to save a file the checker can't read
       await writeFile(file, content, 'utf8');

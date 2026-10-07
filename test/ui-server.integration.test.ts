@@ -172,6 +172,9 @@ describe('recording through the web app', () => {
     const run = (await call('POST', '/api/rules/check', { sessionId: id })).data;
     expect(run.results.map((r: { status: string }) => r.status)).toEqual(['pass']);
 
+    // Pasted with quotes, as Windows' "Copy as path" gives it.
+    expect((await call('PUT', '/api/rules', { path: `  "${file}" ` })).data).toEqual({ ok: true, path: file });
+
     const bad = await call('PUT', '/api/rules', { path: file, content: 'SELECT 1' });
     expect(bad.status).toBe(400); // never saves a file the checker can't read
     expect((await call('PUT', '/api/rules', { path: join(dir, 'notes.txt'), content })).status).toBe(400);

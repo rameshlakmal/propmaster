@@ -178,7 +178,7 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
         </Flex>
         <Flex gap="2" mb="3" wrap="wrap">
           <Box flexGrow="1" minWidth="280px">
-            <TextField.Root value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\rules.sql" aria-label="Rules file path" className="mono" />
+            <TextField.Root value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\rules.sql (pasting with quotes is fine)" aria-label="Rules file path" className="mono" />
           </Box>
           <Button variant="soft" onClick={() => void open()} loading={busy === 'open'} disabled={!path}><FolderOpen /> Open</Button>
           <Button variant="soft" onClick={() => void save()} loading={busy === 'save'} disabled={!path || !dirty}><FloppyDisk /> Save</Button>
