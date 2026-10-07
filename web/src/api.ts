@@ -20,12 +20,24 @@ export class RequestError extends Error {
   }
 }
 
+/** Fired once when the running server is from a different build than this page. */
+export const STALE_SERVER_EVENT = 'propmaster:stale-server';
+let staleReported = false;
+
+function checkBuild(res: Response): void {
+  const served = res.headers.get('X-Propmaster-Build');
+  if (staleReported || !served || served === 'unknown' || served === __BUILD_ID__) return;
+  staleReported = true;
+  window.dispatchEvent(new CustomEvent(STALE_SERVER_EVENT, { detail: { pageIsNewer: served < __BUILD_ID__ } }));
+}
+
 export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Propmaster-Token': token() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  checkBuild(res);
   const data = await res.json().catch(() => ({ error: { message: `The server answered ${res.status}.` } }));
   if (!res.ok) throw new RequestError(res.status, data.error ?? { message: `The server answered ${res.status}.` });
   return data as T;

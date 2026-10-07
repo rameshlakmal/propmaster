@@ -1,4 +1,4 @@
-import { isRawNumber } from '../core/json.js';
+import { isRawNumber, parseJsonExact } from '../core/json.js';
 import type { Change, Row } from './types.js';
 
 /** Formats a value the way it would be written in SQL: 'text', 84.50, NULL. Pass max to shorten long values. */
@@ -10,6 +10,71 @@ export function formatValue(value: unknown, max = Infinity): string {
   const text = typeof value === 'string' ? value.replace(/\r?\n/g, '\\n') : JSON.stringify(value);
   const short = text.length > max ? `${text.slice(0, max - 1)}…` : text;
   return typeof value === 'string' ? `'${short}'` : short;
+}
+
+/**
+ * The JSON inside a value: a jsonb object or array, or text that holds one. Undefined for anything else
+ * (numbers, plain text, NULL), which reads fine on one line.
+ */
+export function jsonOf(value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && !isRawNumber(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!/^[[{]/.test(text)) return undefined;
+  try {
+    const parsed = parseJsonExact(text);
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** JSON written over several lines, indented two spaces, exact numbers kept; null when the value isn't JSON. */
+export function prettyJson(value: unknown): string | null {
+  const json = jsonOf(value);
+  return json === undefined ? null : JSON.stringify(json, null, 2);
+}
+
+export interface JsonChange {
+  /** Where in the JSON, e.g. "packages[0].goodsWeight". */
+  path: string;
+  /** JSON text (objects and arrays indented), or null when the path is missing on that side. */
+  before: string | null;
+  after: string | null;
+}
+
+const MAX_JSON_CHANGES = 30;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v) && !isRawNumber(v);
+}
+
+function jsonText(v: unknown): string | null {
+  if (v === undefined) return null;
+  return v !== null && typeof v === 'object' && !isRawNumber(v) ? JSON.stringify(v, null, 2) : JSON.stringify(v);
+}
+
+/** Every path inside two JSON values where they differ (at most 30), e.g. "[0].goodsWeight". */
+export function jsonChanges(before: unknown, after: unknown, path = '', out: JsonChange[] = []): JsonChange[] {
+  if (out.length >= MAX_JSON_CHANGES) return out;
+  if (isPlainObject(before) && isPlainObject(after)) {
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      const next = /^[A-Za-z_$][\w$]*$/.test(key) ? (path ? `${path}.${key}` : key) : `${path}[${JSON.stringify(key)}]`;
+      jsonChanges(before[key], after[key], next, out);
+    }
+  } else if (Array.isArray(before) && Array.isArray(after)) {
+    for (let i = 0; i < Math.max(before.length, after.length); i++) jsonChanges(before[i], after[i], `${path}[${i}]`, out);
+  } else if (JSON.stringify(before) !== JSON.stringify(after)) {
+    out.push({ path: path || '(whole value)', before: jsonText(before), after: jsonText(after) });
+  }
+  return out;
+}
+
+/** For an updated column holding JSON on both sides: what changed inside it. */
+export function jsonColumnChanges(before: unknown, after: unknown): JsonChange[] | null {
+  const a = jsonOf(before);
+  const b = jsonOf(after);
+  return a === undefined || b === undefined ? null : jsonChanges(a, b);
 }
 
 export function formatPairs(row: Row | null, skip: ReadonlySet<string> = new Set(), max = Infinity): string {

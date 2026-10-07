@@ -3,7 +3,7 @@
 // random token minted at start-up, the Host header must be this server (blocks DNS rebinding), and calls
 // from other web pages are refused (Origin check).
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, resolve } from 'node:path';
@@ -23,6 +23,18 @@ import { toView } from './view.js';
 
 const WEB_ROOT = fileURLToPath(new URL('../../dist/web/', import.meta.url));
 const MAX_BODY = 1_000_000;
+
+/**
+ * The web app build this server started with. Rebuilding while the server runs puts a newer app in front
+ * of older server code; the app compares ids and asks for a restart instead of misreading responses.
+ */
+const STARTED_WITH_BUILD = (() => {
+  try {
+    return readFileSync(resolve(WEB_ROOT, 'build-id.txt'), 'utf8').trim();
+  } catch {
+    return 'unknown';
+  }
+})();
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json',
@@ -180,7 +192,7 @@ async function exportSession(res: ServerResponse, id: string, query: URLSearchPa
 // ---------- plumbing ----------
 
 function send(res: ServerResponse, status: number, data: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Propmaster-Build': STARTED_WITH_BUILD });
   res.end(JSON.stringify(data));
 }
 

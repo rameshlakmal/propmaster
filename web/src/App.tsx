@@ -1,7 +1,7 @@
-import { Box, Flex, Select, Text } from '@radix-ui/themes';
-import { Database, ListChecks, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
-import { useState, type ReactNode } from 'react';
-import { api } from './api';
+import { Box, Button, Callout, Code, Flex, Select, Text } from '@radix-ui/themes';
+import { ArrowClockwise, Database, ListChecks, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api, STALE_SERVER_EVENT } from './api';
 import { floatingSupported, useFloatingWindow } from './floating';
 import { useLoad, useRoute, useSystemAppearance } from './hooks';
 import { RecordPage } from './pages/RecordPage';
@@ -19,8 +19,32 @@ function NavItem({ to, current, icon, children }: { to: string; current: boolean
   );
 }
 
+/** The page and the server are from different builds: say what to do, rather than show wrong data. */
+function useStaleServer(): 'restart-server' | 'reload-page' | null {
+  const [stale, setStale] = useState<'restart-server' | 'reload-page' | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setStale((e as CustomEvent<{ pageIsNewer: boolean }>).detail.pageIsNewer ? 'restart-server' : 'reload-page');
+    window.addEventListener(STALE_SERVER_EVENT, on);
+    return () => window.removeEventListener(STALE_SERVER_EVENT, on);
+  }, []);
+  return stale;
+}
+
+function StaleBanner({ kind }: { kind: 'restart-server' | 'reload-page' }) {
+  return (
+    <Callout.Root color="amber" mb="5" role="alert">
+      <Callout.Text>
+        {kind === 'restart-server'
+          ? <>Propmaster was updated after this server started, so some pages may show nothing or the wrong thing. Stop <Code>npm run ui</Code> (Ctrl+C) and start it again.</>
+          : <>Propmaster was updated. Reload this page to use the new version. <Button size="1" variant="soft" ml="2" onClick={() => location.reload()}><ArrowClockwise /> Reload</Button></>}
+      </Callout.Text>
+    </Callout.Root>
+  );
+}
+
 export function App() {
   const [route] = useRoute();
+  const stale = useStaleServer();
   const config = useLoad(() => api<Config>('GET', '/config'), []);
   const hasProfile = (config.data?.profiles.length ?? 0) > 0;
   // The sidebar's recording indicator, and every page, use the same live status.
@@ -98,7 +122,7 @@ export function App() {
       </aside>
 
       <main className="main">
-        <div className="page">{page}</div>
+        <div className="page">{stale && <StaleBanner kind={stale} />}{page}</div>
       </main>
     </div>
   );

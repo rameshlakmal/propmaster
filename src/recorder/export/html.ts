@@ -1,4 +1,4 @@
-import { columnDiffs, formatKey, formatPairs, formatTime, formatValue, plural, tableLabel } from '../format.js';
+import { columnDiffs, formatKey, formatPairs, formatTime, formatValue, plural, prettyJson, tableLabel } from '../format.js';
 import type { Change, Marker, Recording } from '../types.js';
 import type { ExportOptions } from './markdown.js';
 import { summarize } from './summary.js';
@@ -36,6 +36,10 @@ function oneLine(change: Change): string {
 const LONG_VALUE = 160;
 
 function cellHtml(side: 'before' | 'after', value: unknown): string {
+  const json = prettyJson(value);
+  if (json !== null) {
+    return `<td class="${side} json"><pre class="json" tabindex="0" aria-label="${side} value, JSON">${e(json)}</pre></td>`;
+  }
   const text = formatValue(value);
   const long = text.length > LONG_VALUE;
   return long
@@ -155,6 +159,8 @@ tr td.before:not(:last-child), tr td.before + td.after { width: 50%; }
 tr.changed td.before { color: var(--delete); text-decoration: line-through; text-decoration-thickness: 1px; }
 tr.changed td.before.long { text-decoration: none; } /* struck-through paragraphs are unreadable */
 td.long .scroll { max-height: 12em; overflow-y: auto; white-space: pre-wrap; }
+pre.json { margin: 0; max-height: 22em; overflow: auto; white-space: pre; font: 12.5px/1.5 ui-monospace, Consolas, monospace; }
+tr.changed td.before.json { text-decoration: none; } /* struck-through JSON is unreadable */
 tr.changed td.after { background: var(--changed); font-weight: 600; }
 .brief { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .change[open] .brief { white-space: normal; }

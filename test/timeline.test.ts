@@ -120,7 +120,9 @@ describe('very long values', () => {
     const lines = formatTimeline(rec, { colors, width: 100 }).split('\n');
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(100);
     expect(lines.filter((l) => l.includes('…')).length).toBeGreaterThan(0);
-    expect(lines.length).toBeLessThan(20);
+    // JSON keeps its shape over several lines, but a big value stops after 15 of them.
+    expect(lines.some((l) => /… \d+ more lines \(record export shows all\)/.test(l))).toBe(true);
+    expect(lines.length).toBeLessThan(40);
   });
 
   it('keep the full value in the HTML report, for the reader who needs it', async () => {

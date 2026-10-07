@@ -19,6 +19,13 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
   );
 }
 
+/** One side of a changed JSON path: a number or string inline, an object or array as an indented block. */
+function JsonPart({ text, className }: { text: string | null; className: string }) {
+  if (text === null) return <span className="v-null">missing</span>;
+  if (text.includes('\n')) return <pre className="v-json-block json-part" tabIndex={0}>{text}</pre>;
+  return <span className={className}>{text}</span>;
+}
+
 /** "id=66 sku='A1'" → the key column names, so inserts don't repeat what the Row column shows. */
 function keyColumns(change: Change): Set<string> {
   return new Set((change.key ?? '').split(' ').map((p) => p.split('=')[0]!).filter(Boolean));
@@ -42,10 +49,10 @@ function ChangeSummary({ change }: { change: Change }) {
                 {c.jsonChanges.map((j) => (
                   <span key={j.path} className="json-change">
                     <span className="json-path">{j.path}</span>
-                    <span className="was">{j.before ?? 'missing'}</span>
+                    <JsonPart text={j.before} className="was" />
                     <span className="arrow" aria-hidden>→</span>
                     <span className="sr-only"> changed to </span>
-                    <span className="now">{j.after ?? 'missing'}</span>
+                    <JsonPart text={j.after} className="now" />
                   </span>
                 ))}
               </span>

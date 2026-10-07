@@ -129,7 +129,8 @@ describe('what changed inside JSON', () => {
       { path: 'gone', before: 'true', after: null },
       { path: 'added', before: null, after: 'null' },
     ]);
-    expect(jsonChanges([1], { a: 1 })).toEqual([{ path: '(whole value)', before: '[1]', after: '{"a":1}' }]);
+    // Objects and arrays come back indented, so they can be shown over several lines.
+    expect(jsonChanges([1], { a: 1 })).toEqual([{ path: '(whole value)', before: '[\n  1\n]', after: '{\n  "a": 1\n}' }]);
     expect(jsonChanges({ price: JSON.rawJSON('84.50') }, { price: JSON.rawJSON('84.50') })).toEqual([]);
   });
 

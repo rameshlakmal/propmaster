@@ -1,6 +1,6 @@
 import { boxTable, brand, cell, divider, makeStyle, spread, type Cell, type Colors, type Column, type Token } from '../core/ui.js';
 import { summarize } from './export/summary.js';
-import { formatDateTime, formatDuration, formatTime, formatValue, plural, tableLabel, utcOffset } from './format.js';
+import { formatDateTime, formatDuration, formatTime, formatValue, jsonColumnChanges, plural, prettyJson, tableLabel, utcOffset } from './format.js';
 import type { Change, Marker, Recording, Row } from './types.js';
 
 const MAX_VALUE_LENGTH = 40;
@@ -19,8 +19,30 @@ const OP_STYLE = {
   TRUNCATE: (c: Colors) => c.magenta,
 } as const;
 
+/** JSON values print over several lines; this many at most per value, then a count of the rest. */
+const MAX_JSON_LINES = 15;
+
 function pairTokens(row: Row | null, skip: Set<string> = new Set()): Token[] {
-  return Object.entries(row ?? {}).filter(([col]) => !skip.has(col)).map(([col, v]) => ({ text: `${col}=${formatValue(v, MAX_VALUE_LENGTH)}`, shorten: true }));
+  return Object.entries(row ?? {})
+    .filter(([col, v]) => !skip.has(col) && prettyJson(v) === null)
+    .map(([col, v]) => ({ text: `${col}=${formatValue(v, MAX_VALUE_LENGTH)}`, shorten: true }));
+}
+
+/** JSON lines as paragraphs of one token each, so their indentation is kept. */
+function jsonLines(json: string, c: Colors, style?: (s: string) => string): Token[][] {
+  const lines = json.split('\n');
+  const shown = lines.slice(0, MAX_JSON_LINES).map((line) => [{ text: line, style }]);
+  return lines.length > MAX_JSON_LINES
+    ? [...shown, [{ text: `… ${lines.length - MAX_JSON_LINES} more lines (record export shows all)`, style: (t: string) => c.dim(t) }]]
+    : shown;
+}
+
+/** Each JSON column of a row: its name, then the JSON over several lines. */
+function jsonBlocks(row: Row | null, skip: Set<string>, c: Colors, style?: (s: string) => string): Cell {
+  return Object.entries(row ?? {}).flatMap(([col, v]) => {
+    const json = skip.has(col) ? null : prettyJson(v);
+    return json === null ? [] : [[{ text: `${col}=`, style: (t: string) => c.dim(t) }], ...jsonLines(json, c, style)];
+  });
 }
 
 /** The four cells of one change: operation, table, row key, and what changed. */
@@ -32,22 +54,45 @@ export function changeRow(change: Change, c: Colors): Cell[] {
 
   let changes: Cell;
   switch (change.op) {
-    case 'INSERT':
-      changes = [pairTokens(change.newValues, keyCols)];
+    case 'INSERT': {
+      const pairs = pairTokens(change.newValues, keyCols);
+      changes = [...(pairs.length ? [pairs] : []), ...jsonBlocks(change.newValues, keyCols, c)];
       break;
+    }
     case 'UPDATE':
-      // One line per changed column: "stock 20 → 18", the new value highlighted.
-      changes = Object.keys(change.newValues ?? {}).map((col) => [
-        { text: col },
-        { text: formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH) },
-        { text: '→', style: (t) => c.dim(t) },
-        { text: formatValue(change.newValues?.[col], MAX_VALUE_LENGTH), style: (t) => c.yellow(t) },
-      ]);
+      // One line per changed column: "stock 20 → 18", the new value highlighted. For JSON, one line per path inside it.
+      changes = Object.keys(change.newValues ?? {}).flatMap((col): Token[][] => {
+        const inside = jsonColumnChanges(change.oldValues?.[col], change.newValues?.[col]);
+        if (!inside) {
+          return [[
+            { text: col },
+            { text: formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH) },
+            { text: '→', style: (t) => c.dim(t) },
+            { text: formatValue(change.newValues?.[col], MAX_VALUE_LENGTH), style: (t) => c.yellow(t) },
+          ]];
+        }
+        return inside.flatMap((j) => {
+          const label = { text: `${col}.${j.path}`.replace('.[', '['), style: (t: string) => c.dim(t) };
+          const multi = (j.before ?? '').includes('\n') || (j.after ?? '').includes('\n');
+          if (!multi) {
+            return [[label, { text: j.before ?? 'missing' }, { text: '→', style: (t: string) => c.dim(t) }, { text: j.after ?? 'missing', style: (t: string) => c.yellow(t) }]];
+          }
+          // A key only on one side was added or removed: show that side alone.
+          if (j.before === null) return [[label, { text: 'added', style: (t: string) => c.green(t) }], ...jsonLines(j.after!, c, (t) => c.yellow(t))];
+          if (j.after === null) return [[label, { text: 'removed', style: (t: string) => c.red(t) }], ...jsonLines(j.before, c, (t) => c.dim(t))];
+          return [[label], [{ text: 'before:', style: (t: string) => c.dim(t) }], ...jsonLines(j.before, c),
+            [{ text: 'after:', style: (t: string) => c.dim(t) }], ...jsonLines(j.after, c, (t) => c.yellow(t))];
+        });
+      });
       break;
-    case 'DELETE':
+    case 'DELETE': {
       // Without a primary key, the old values are the only way to tell which row went.
-      changes = change.rowKey ? cell('row removed', (t) => c.dim(t)) : [pairTokens(change.oldValues).map((t) => ({ ...t, style: (s: string) => c.dim(s) }))];
+      if (change.rowKey) { changes = cell('row removed', (t) => c.dim(t)); break; }
+      const dim = (s: string) => c.dim(s);
+      const pairs = pairTokens(change.oldValues).map((t) => ({ ...t, style: dim }));
+      changes = [...(pairs.length ? [pairs] : []), ...jsonBlocks(change.oldValues, new Set(), c, dim)];
       break;
+    }
     case 'TRUNCATE':
       changes = cell('every row removed', (t) => c.dim(t));
       break;
