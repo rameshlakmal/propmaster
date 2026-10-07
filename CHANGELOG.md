@@ -6,7 +6,7 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ### Changed
 
-- **Restyled terminal output** across the CLI: a PROPMASTER header, `STEP n` sections with counts on the right, changes in aligned columns with values on the lines below, a summary line, rule results with the breaking rows as a table, and consistent messages with a `→` next step. Output fits the terminal width.
+- **Restyled terminal output** across the CLI: a PROPMASTER header, `STEP n` sections with counts on the right, and **bordered tables**: one per step for the timeline (Op, Table, Row, Changes; the same column widths for every step), one for rule results plus a table of the breaking rows under each failure, and one for `record list`. Long text wraps between words inside its cell, values too long for a cell are shortened with `…`, and everything fits the terminal width. Messages are consistent, with a `→` next step.
 - The demo explains itself (it plays a tester) and runs in numbered stages; the Docker demo hides npm's setup output.
 
 ### Fixed

@@ -85,6 +85,115 @@ export function wrapItems(items: string[], indent: number, width: number): strin
   return lines.map((l) => ' '.repeat(indent) + l);
 }
 
+// ---------- bordered tables ----------
+
+/** A piece of cell text and how to colour it. Wrapping works on the plain text, colour is added after. */
+export interface Token {
+  text: string;
+  style?: (s: string) => string;
+  /** Too long for a whole line: shorten it with "…" instead of cutting it across lines. */
+  shorten?: boolean;
+}
+
+/** A cell is a list of paragraphs; each paragraph is tokens joined by spaces, wrapped to the column width. */
+export type Cell = Token[][];
+
+/** A cell of ordinary text: it wraps between words. */
+export const cell = (text: string, style?: (s: string) => string): Cell =>
+  [text.trim() ? text.split(/ +/).filter(Boolean).map((word) => ({ text: word, style })) : [{ text, style }]];
+
+export interface Column {
+  header: string;
+  /** Widest the column may get before it wraps. */
+  max?: number;
+  /** The column that takes the width left over (and wraps). One per table. */
+  flex?: boolean;
+}
+
+/** Greedy word wrap of tokens; a token longer than the line is cut into pieces. */
+function wrapTokens(tokens: Token[], width: number): Token[][] {
+  const lines: Token[][] = [];
+  let line: Token[] = [];
+  let used = 0;
+  for (const token of tokens) {
+    let rest = token.shorten && token.text.length > width ? `${token.text.slice(0, width - 1)}…` : token.text;
+    while (rest.length > 0) {
+      const gap = line.length ? 1 : 0;
+      const room = width - used - gap;
+      if (rest.length <= room) {
+        line.push({ ...token, text: rest });
+        used += gap + rest.length;
+        rest = '';
+      } else if (line.length) {
+        // Start a new line: a value is only ever cut when it is longer than a whole line.
+        lines.push(line);
+        line = [];
+        used = 0;
+      } else {
+        line.push({ ...token, text: rest.slice(0, width) });
+        lines.push(line);
+        line = [];
+        used = 0;
+        rest = rest.slice(width);
+      }
+    }
+  }
+  if (line.length || lines.length === 0) lines.push(line);
+  return lines;
+}
+
+const plainWidth = (paragraph: Token[]) => paragraph.reduce((n, t, i) => n + t.text.length + (i ? 1 : 0), 0);
+const render = (line: Token[]) => line.map((t) => (t.style ? t.style(t.text) : t.text)).join(' ');
+
+/** A table with box-drawing borders that fits the given width; the flex column (or the widest) wraps. */
+export interface BoxOptions {
+  header?: boolean;
+  /** Rows to size the columns by, when several tables should line up (default: this table's rows). */
+  measure?: Cell[][];
+}
+
+export function boxTable(s: Style, columns: Column[], rows: Cell[][], { header = true, measure = rows }: BoxOptions = {}): string[] {
+  const { c } = s;
+  const natural = columns.map((col, i) => Math.min(
+    col.max ?? Infinity,
+    Math.max(col.header.length, ...measure.map((r) => Math.max(0, ...(r[i] ?? []).map(plainWidth)))),
+  ));
+
+  // Each column costs its width plus 3 (space, content, space, border); the line has a margin and one more border.
+  const budget = s.width - 2 - columns.length * 3;
+  const widths = [...natural];
+  let flex = columns.findIndex((col) => col.flex);
+  if (flex === -1) flex = widths.indexOf(Math.max(...widths));
+  const others = widths.reduce((n, w, i) => (i === flex ? n : n + w), 0);
+  widths[flex] = columns[flex]!.flex
+    ? Math.max(12, budget - others)
+    : Math.min(widths[flex]!, Math.max(8, budget - others)); // only ever shrinks to fit, never grows
+
+  const border = (l: string, m: string, r: string) => ` ${c.dim(l + widths.map((w) => '─'.repeat(w + 2)).join(m) + r)}`;
+  const bar = c.dim('│');
+  const lines: string[] = [border('┌', '┬', '┐')];
+
+  const emit = (cells: Cell[]) => {
+    const wrapped = cells.map((cl, i) => cl.flatMap((para) => wrapTokens(para, widths[i]!)));
+    const height = Math.max(1, ...wrapped.map((w) => w.length));
+    for (let n = 0; n < height; n++) {
+      const parts = wrapped.map((w, i) => {
+        const line = w[n] ?? [];
+        return ` ${render(line)}${' '.repeat(Math.max(0, widths[i]! - plainWidth(line)))} `;
+      });
+      lines.push(` ${bar}${parts.join(bar)}${bar}`);
+    }
+  };
+
+  if (header) {
+    emit(columns.map((col) => cell(col.header, (t) => c.bold(t))));
+    lines.push(border('├', '┼', '┤'));
+  }
+  for (const row of rows) emit(row);
+  lines.push(border('└', '┴', '┘'));
+  return lines;
+}
+
 /** A small aligned table with a dim header row. */
 export function table(c: Colors, headers: string[], rows: string[][], indent = 1): string[] {
   const widths = headers.map((h, i) => Math.max(visibleLength(h), ...rows.map((r) => visibleLength(r[i] ?? ''))));

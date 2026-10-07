@@ -7,7 +7,7 @@ import { createInterface } from 'node:readline/promises';
 import { Command, Option } from 'commander';
 import { describeDatabase, resolveDatabaseUrl, withDb, type Db } from './core/db.js';
 import { explainError, UserError } from './core/errors.js';
-import { brand, hint, icons, makeStyle, spread, table } from './core/ui.js';
+import { boxTable, brand, cell, hint, icons, makeStyle, spread } from './core/ui.js';
 import { diagnose } from './recorder/doctor.js';
 import { toHtml } from './recorder/export/html.js';
 import { toMarkdown } from './recorder/export/markdown.js';
@@ -284,13 +284,14 @@ record
       say(` ${i.idle} No sessions recorded yet.`, hint(c, 'propmaster record start "My test"'));
       return;
     }
-    const shortName = (n: string) => (n.length > 40 ? `${n.slice(0, 39)}…` : n);
-    say(...table(c, ['SESSION', 'STARTED', 'NAME', 'CHANGES', 'MODE'], sessions.map((s) => [
-      c.bold(`#${s.id}`),
-      formatDateTime(s.startedAt).slice(0, 16),
-      shortName(s.name),
-      String(s.changeCount),
-      `${s.mode}${s.stoppedAt ? '' : ` ${c.red('● recording')}`}`,
+    say(...boxTable(ui, [
+      { header: 'Session' }, { header: 'Started' }, { header: 'Name', flex: true }, { header: 'Changes' }, { header: 'Mode' },
+    ], sessions.map((s) => [
+      cell(`#${s.id}`, (t) => c.bold(t)),
+      cell(formatDateTime(s.startedAt).slice(0, 16)),
+      cell(s.name),
+      cell(String(s.changeCount)),
+      s.stoppedAt ? cell(s.mode) : [[{ text: s.mode }, { text: '● recording', style: c.red }]],
     ])));
   }));
 

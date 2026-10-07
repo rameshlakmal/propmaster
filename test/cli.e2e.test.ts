@@ -53,15 +53,15 @@ describe('propmaster CLI', () => {
     const stop = await cli(['record', 'stop']);
     expect(stop.code).toBe(0);
     expect(stop.out).toMatch(/ STEP 1 {2}Click Place Order +4 changes/);
-    expect(stop.out).toMatch(/~ update +inventory +product_id=3 +stock 6 → 4/);
+    expect(stop.out).toMatch(/│ update +│ inventory +│ product_id=3 +│ stock 6 → 4 +│/);
     expect(stop.out).toContain('total=84.50');
     expect(stop.out).toContain(' 4 changes · 4 tables · 3 inserts · 1 update');
 
     const filtered = await cli(['record', 'show', '--table', 'orders,payments', '--op', 'insert']);
     expect(filtered.out).toContain('2 changes hidden by filters');
-    expect(filtered.out).not.toContain('~ update');
+    expect(filtered.out).not.toContain('│ update');
 
-    expect((await cli(['record', 'list'])).out).toMatch(/#\d+ +\d{4}-\d\d-\d\d \d\d:\d\d +CLI checkout +4 +trigger/);
+    expect((await cli(['record', 'list'])).out).toMatch(/│ #\d+ +│ \d{4}-\d\d-\d\d \d\d:\d\d │ CLI checkout +│ 4 +│ trigger +│/);
 
     const html = join(home, 'report.html');
     expect((await cli(['record', 'export', '-o', html])).out).toContain(`✔ Wrote ${html}`);
@@ -93,7 +93,7 @@ describe('propmaster CLI', () => {
     const stop = await cli(['record', 'stop'], reader);
     expect(stop.out).toContain('snapshot mode');
     expect(stop.out).toMatch(/ STEP 1 {2}Order +4 changes/);
-    expect((await cli(['record', 'list'], reader)).out).toMatch(/#s\d+ +.* RO +4 +snapshot/);
+    expect((await cli(['record', 'list'], reader)).out).toMatch(/│ #s\d+ +│ [\d :-]+│ RO +│ 4 +│ snapshot +│/);
   });
 
   it('survives being killed in the middle of a snapshot step', async () => {
@@ -117,7 +117,7 @@ describe('propmaster CLI', () => {
     await db.query('SELECT place_order(1, 1, 1)');
     const stop = await cli(['record', 'stop'], reader);
     expect(stop.code).toBe(0);
-    expect(stop.out).toMatch(/\+ insert +orders/);
+    expect(stop.out).toMatch(/│ insert +│ orders +│/);
     expect((await cli(['record', 'list'], reader)).out).toContain('Interrupted');
   });
 
@@ -131,9 +131,9 @@ describe('propmaster CLI', () => {
     const failed = await cli(['record', 'check', 'demo/rules.sql']);
     expect(failed.code).toBe(1);
     expect(failed.out).toMatch(/Session #\d+ · Discount check\n rule check · 4 rules from demo\/rules.sql/);
-    expect(failed.out).toMatch(/✖ Order total is the items' price, with 10% off for 2 or more items +1 violation in 1 row of orders/);
-    expect(failed.out).toMatch(/order_id +total +expected\n +1 +84\.50 +76\.05/);
-    expect(failed.out).toMatch(/✔ Payment amount matches the order total +1 row of payments/);
+    expect(failed.out).toMatch(/│ ✖ │ Order total is the items' price,.*│ 1 row of orders +│ 1 violation +│/);
+    expect(failed.out).toMatch(/│ order_id │ total │ expected │\n ├[─┼]+┤\n │ 1 +│ 84\.50 │ 76\.05 +│/);
+    expect(failed.out).toMatch(/│ ✔ │ Payment amount matches the order total +│ 1 row of payments +│ pass +│/);
     expect(failed.out).toContain('3 passed · 1 failed');
 
     const passed = await cli(['record', 'check', 'demo/rules.sql', '--all-rows']);

@@ -1,57 +1,58 @@
-import { brand, divider, makeStyle, pad, spread, visibleLength, wrapItems, type Colors, type Style } from '../core/ui.js';
+import { boxTable, brand, cell, divider, makeStyle, spread, type Cell, type Colors, type Column, type Token } from '../core/ui.js';
 import { summarize } from './export/summary.js';
-import { formatDateTime, formatDuration, formatKey, formatValue, plural, tableLabel, utcOffset } from './format.js';
-import type { Change, Recording } from './types.js';
+import { formatDateTime, formatDuration, formatValue, plural, tableLabel, utcOffset } from './format.js';
+import type { Change, Recording, Row } from './types.js';
 
 const MAX_VALUE_LENGTH = 40;
-const INDENT = 3;          // where the operation starts
-const OP_WIDTH = 12;       // "! truncate" plus two spaces
-const VALUES_AT = INDENT + OP_WIDTH;
-const MAX_TABLE_WIDTH = 22;
 
-const OP_LABEL = {
-  INSERT: (c: Colors) => c.green('+ insert'),
-  UPDATE: (c: Colors) => c.yellow('~ update'),
-  DELETE: (c: Colors) => c.red('- delete'),
-  TRUNCATE: (c: Colors) => c.magenta('! truncate'),
+const COLUMNS: Column[] = [
+  { header: 'Op' },
+  { header: 'Table', max: 24 },
+  { header: 'Row', max: 24 },
+  { header: 'Changes', flex: true },
+];
+
+const OP_STYLE = {
+  INSERT: (c: Colors) => c.green,
+  UPDATE: (c: Colors) => c.yellow,
+  DELETE: (c: Colors) => c.red,
+  TRUNCATE: (c: Colors) => c.magenta,
 } as const;
 
-function pairs(row: Record<string, unknown> | null, skip: Set<string>): string[] {
-  return Object.entries(row ?? {}).filter(([col]) => !skip.has(col)).map(([col, v]) => `${col}=${formatValue(v, MAX_VALUE_LENGTH)}`);
+function pairTokens(row: Row | null, skip: Set<string> = new Set()): Token[] {
+  return Object.entries(row ?? {}).filter(([col]) => !skip.has(col)).map(([col, v]) => ({ text: `${col}=${formatValue(v, MAX_VALUE_LENGTH)}`, shorten: true }));
 }
 
-/** One change: the operation, table and key on the first line, then the values (dimmed) where they fit. */
-export function formatChangeLines(change: Change, s: Style, tableWidth: number): string[] {
-  const { c } = s;
+/** The four cells of one change: operation, table, row key, and what changed. */
+export function changeRow(change: Change, c: Colors): Cell[] {
   const keyCols = new Set(Object.keys(change.rowKey ?? {}));
-  const key = formatKey(change) ?? c.dim('(no primary key)');
-  // A table name longer than the column still keeps two spaces before the key.
-  const tableCell = c.bold(tableLabel(change));
-  const head = `${' '.repeat(INDENT)}${pad(OP_LABEL[change.op](c), OP_WIDTH)}${tableCell}${' '.repeat(Math.max(2, tableWidth + 2 - tableLabel(change).length))}`;
+  const op = cell(change.op.toLowerCase(), OP_STYLE[change.op](c));
+  const table = cell(tableLabel(change), (t) => c.bold(t));
+  const key: Cell = change.rowKey ? [pairTokens(change.rowKey)] : cell('(no primary key)', (t) => c.dim(t));
 
+  let changes: Cell;
   switch (change.op) {
     case 'INSERT':
-      return [`${head}${key}`, ...wrapItems(pairs(change.newValues, keyCols).map((p) => c.dim(p)), VALUES_AT, s.width)];
-    case 'UPDATE': {
-      const cols = Object.keys(change.newValues ?? {});
-      const before = (col: string) => formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH);
-      const after = (col: string) => c.yellow(formatValue(change.newValues?.[col], MAX_VALUE_LENGTH));
-      const oneLine = `${head}${key}   ${cols.map((col) => `${col} ${before(col)} → ${after(col)}`).join(', ')}`;
-      if (visibleLength(oneLine) <= s.width || cols.length === 0) return [oneLine];
-
-      // One column per line; when even that is too wide, the new value goes under the old one.
-      const at = ' '.repeat(VALUES_AT);
-      return [`${head}${key}`, ...cols.flatMap((col) => {
-        const line = `${at}${col} ${before(col)} → ${after(col)}`;
-        return visibleLength(line) <= s.width ? [line] : [`${at}${col} ${before(col)}`, `${at}${' '.repeat(col.length)} → ${after(col)}`];
-      })];
-    }
+      changes = [pairTokens(change.newValues, keyCols)];
+      break;
+    case 'UPDATE':
+      // One line per changed column: "stock 20 → 18", the new value highlighted.
+      changes = Object.keys(change.newValues ?? {}).map((col) => [
+        { text: col },
+        { text: formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH) },
+        { text: '→', style: (t) => c.dim(t) },
+        { text: formatValue(change.newValues?.[col], MAX_VALUE_LENGTH), style: (t) => c.yellow(t) },
+      ]);
+      break;
     case 'DELETE':
       // Without a primary key, the old values are the only way to tell which row went.
-      return change.rowKey ? [`${head}${key}`] : [`${head}${key}`, ...wrapItems(pairs(change.oldValues, new Set()).map((p) => c.dim(p)), VALUES_AT, s.width)];
+      changes = change.rowKey ? cell('row removed', (t) => c.dim(t)) : [pairTokens(change.oldValues).map((t) => ({ ...t, style: (s: string) => c.dim(s) }))];
+      break;
     case 'TRUNCATE':
-      return [`${head}${c.dim('every row removed')}`];
+      changes = cell('every row removed', (t) => c.dim(t));
+      break;
   }
+  return [op, table, key, changes];
 }
 
 export interface TimelineOptions {
@@ -61,7 +62,7 @@ export interface TimelineOptions {
   hidden?: number;
 }
 
-/** Renders a recording as a step-by-step timeline for the terminal. */
+/** Renders a recording as a step-by-step timeline for the terminal: one bordered table per step. */
 export function formatTimeline(rec: Recording, { colors, width, hidden = 0 }: TimelineOptions = {}): string {
   const s = makeStyle({ colors, width });
   const { c } = s;
@@ -75,16 +76,16 @@ export function formatTimeline(rec: Recording, { colors, width, hidden = 0 }: Ti
   lines.push(` ${c.dim(details.join(' · '))}${rec.stoppedAt ? '' : `  ${c.red('● recording')}`}`);
   for (const note of rec.notes) lines.push(` ${c.yellow(`! ${note}`)}`);
 
-  const changes = rec.steps.flatMap((st) => st.changes);
-  const tableWidth = Math.min(MAX_TABLE_WIDTH, Math.max(5, ...changes.map((ch) => tableLabel(ch).length)));
+  // Every step's table gets the same column widths, so the borders line up down the page.
+  const measure = rec.steps.flatMap((st) => st.changes.map((ch) => changeRow(ch, c)));
 
   for (const step of rec.steps) {
     // Step 0 collects changes made before the first named step; hide it when empty.
     if (step.seq === 0 && step.changes.length === 0) continue;
     lines.push('');
     lines.push(spread(` ${c.cyan(c.bold(`STEP ${step.seq}`))}  ${c.bold(step.name)}`, c.dim(plural(step.changes.length, 'change')), s.width));
-    if (step.changes.length === 0) lines.push(`${' '.repeat(INDENT)}${c.dim('no database changes')}`);
-    for (const change of step.changes) lines.push(...formatChangeLines(change, s, tableWidth));
+    if (step.changes.length === 0) lines.push(`   ${c.dim('no database changes')}`);
+    else lines.push(...boxTable(s, COLUMNS, step.changes.map((ch) => changeRow(ch, c)), { measure }));
   }
 
   const sum = summarize(rec);

@@ -20,21 +20,29 @@ $ propmaster record stop
  ■ Stopped session #12
 
   PROPMASTER   Session #12 · Checkout happy path
- qa_shop · 2026-10-07 11:01:59 → 11:02:27 (28s) · UTC+05:30
+ qa_shop · 2026-10-07 16:52:30 → 16:53:00 (30s) · UTC+05:30
 
  STEP 1  Click Place Order                                             4 changes
-   ~ update    inventory    product_id=3   stock 20 → 18
-   + insert    orders       id=54
-               customer_id=45 status='PENDING' total=84.50
-               created_at='2026-10-07T11:02:05.586281+00:00'
-   + insert    order_items  id=54
-               order_id=54 product_id=3 qty=2 unit_price=42.25
-   + insert    payments     id=54
-               order_id=54 amount=84.50 method='CARD' status='AUTHORIZED'
+ ┌────────┬─────────────┬──────────────┬───────────────────────────────────────┐
+ │ Op     │ Table       │ Row          │ Changes                               │
+ ├────────┼─────────────┼──────────────┼───────────────────────────────────────┤
+ │ update │ inventory   │ product_id=3 │ stock 20 → 18                         │
+ │ insert │ orders      │ id=57        │ customer_id=1 status='PENDING'        │
+ │        │             │              │ total=84.50                           │
+ │        │             │              │ created_at='2026-10-07T11:22:44.0110… │
+ │ insert │ order_items │ id=57        │ order_id=57 product_id=3 qty=2        │
+ │        │             │              │ unit_price=42.25                      │
+ │ insert │ payments    │ id=57        │ order_id=57 amount=84.50              │
+ │        │             │              │ method='CARD' status='AUTHORIZED'     │
+ └────────┴─────────────┴──────────────┴───────────────────────────────────────┘
 
  STEP 2  Cancel the order                                              2 changes
-   ~ update    orders       id=54   status 'PENDING' → 'CANCELLED'
-   ~ update    inventory    product_id=3   stock 18 → 20
+ ┌────────┬─────────────┬──────────────┬───────────────────────────────────────┐
+ │ Op     │ Table       │ Row          │ Changes                               │
+ ├────────┼─────────────┼──────────────┼───────────────────────────────────────┤
+ │ update │ orders      │ id=57        │ status 'PENDING' → 'CANCELLED'        │
+ │ update │ inventory   │ product_id=3 │ stock 18 → 20                         │
+ └────────┴─────────────┴──────────────┴───────────────────────────────────────┘
 
  ──────────────────────────────────────────────────────────────────────────────
  6 changes · 4 tables · 3 inserts · 3 updates
@@ -151,12 +159,25 @@ $ propmaster record check demo/rules.sql
   PROPMASTER   Session #13 · Checkout on build v2
  rule check · 4 rules from demo/rules.sql
 
- ✔ Order total is the items' price, with 10% off for 2 or more items  1 row of orders
- ✖ Payment amount matches the order total       1 violation in 1 row of payments
-     order_id   amount   total
-     55         84.50    76.05
- ✔ Every order in the session has exactly one payment            1 row of orders
- ✔ Items are charged at the product's current price         1 row of order_items
+ ┌───┬────────────────────────────────────┬──────────────────────┬─────────────┐
+ │   │ Rule                               │ Checked              │ Result      │
+ ├───┼────────────────────────────────────┼──────────────────────┼─────────────┤
+ │ ✔ │ Order total is the items' price,   │ 1 row of orders      │ pass        │
+ │   │ with 10% off for 2 or more items   │                      │             │
+ │ ✖ │ Payment amount matches the order   │ 1 row of payments    │ 1 violation │
+ │   │ total                              │                      │             │
+ │ ✔ │ Every order in the session has     │ 1 row of orders      │ pass        │
+ │   │ exactly one payment                │                      │             │
+ │ ✔ │ Items are charged at the product's │ 1 row of order_items │ pass        │
+ │   │ current price                      │                      │             │
+ └───┴────────────────────────────────────┴──────────────────────┴─────────────┘
+
+ ✖ Payment amount matches the order total · 1 violation
+ ┌──────────┬────────┬───────┐
+ │ order_id │ amount │ total │
+ ├──────────┼────────┼───────┤
+ │ 55       │ 84.50  │ 76.05 │
+ └──────────┴────────┴───────┘
 
  ──────────────────────────────────────────────────────────────────────────────
  3 passed · 1 failed

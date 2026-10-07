@@ -2,8 +2,7 @@ import pc from 'picocolors';
 import { describe, expect, it } from 'vitest';
 import { parseJsonExact } from '../src/core/json.js';
 import { formatDuration, formatValue, utcOffset } from '../src/recorder/format.js';
-import { makeStyle } from '../src/core/ui.js';
-import { formatChangeLines, formatTimeline } from '../src/recorder/timeline.js';
+import { changeRow, formatTimeline } from '../src/recorder/timeline.js';
 import { change, checkoutRecording, recording, step } from './fixtures.js';
 
 const colors = pc.createColors(false);
@@ -29,60 +28,49 @@ describe('formatValue', () => {
   });
 });
 
-describe('formatChangeLines', () => {
-  const s = makeStyle({ colors, width: 80 });
-  const lines = (ch: Parameters<typeof formatChangeLines>[0], tableWidth = 9) => formatChangeLines(ch, s, tableWidth);
+describe('changeRow', () => {
+  const text = (cells: ReturnType<typeof changeRow>) => cells.map((cl) => cl.map((para) => para.map((t) => t.text).join(' ')));
 
-  it('shows an insert with its key, and the other values on the lines below', () => {
-    expect(lines(change({ newValues: { id: 1043, status: 'PENDING', total: 84.5 }, rowKey: { id: 1043 } }))).toEqual([
-      '   + insert    orders     id=1043',
-      "               status='PENDING' total=84.5",
-    ]);
+  it('puts the operation, table, key and new values of an insert in four cells', () => {
+    expect(text(changeRow(change({ newValues: { id: 1043, status: 'PENDING', total: 84.5 }, rowKey: { id: 1043 } }), colors)))
+      .toEqual([['insert'], ['orders'], ['id=1043'], ["status='PENDING' total=84.5"]]);
   });
 
-  it('shows only changed columns of an update as old → new, on one line', () => {
-    expect(lines(change({
-      op: 'UPDATE', tableName: 'inventory', rowKey: { product_id: 7 }, oldValues: { stock: 12 }, newValues: { stock: 10 },
-    }))).toEqual(['   ~ update    inventory  product_id=7   stock 12 → 10']);
-  });
-
-  it('puts many updated columns on lines of their own', () => {
-    const many = Object.fromEntries(Array.from({ length: 6 }, (_, n) => [`column_${n}`, `value number ${n}`]));
-    const out = lines(change({ op: 'UPDATE', rowKey: { id: 1 }, oldValues: many, newValues: many }));
-    expect(out[0]).toBe('   ~ update    orders     id=1');
-    expect(out.slice(1)).toHaveLength(6);
-    expect(out[1]).toBe("               column_0 'value number 0' → 'value number 0'");
+  it('gives each changed column of an update its own line, old → new', () => {
+    expect(text(changeRow(change({
+      op: 'UPDATE', tableName: 'inventory', rowKey: { product_id: 7 },
+      oldValues: { stock: 12, note: 'a' }, newValues: { stock: 10, note: 'b' },
+    }), colors))).toEqual([['update'], ['inventory'], ['product_id=7'], ['stock 12 → 10', "note 'a' → 'b'"]]);
   });
 
   it('shows the old values of a deleted row without a primary key', () => {
-    expect(lines(change({ op: 'DELETE', tableName: 'events', rowKey: null, oldValues: { kind: 'click' } }))).toEqual([
-      '   - delete    events     (no primary key)',
-      "               kind='click'",
-    ]);
+    expect(text(changeRow(change({ op: 'DELETE', tableName: 'events', rowKey: null, oldValues: { kind: 'click' } }), colors)))
+      .toEqual([['delete'], ['events'], ['(no primary key)'], ["kind='click'"]]);
   });
 
-  it('shows a truncate', () => {
-    expect(lines(change({ op: 'TRUNCATE', rowKey: null }))).toEqual(['   ! truncate  orders     every row removed']);
-  });
-
-  it('keeps two spaces after a table name longer than the column', () => {
-    expect(lines(change({ op: 'DELETE', tableSchema: 'billing', tableName: 'invoices' }))).toEqual(['   - delete    billing.invoices  id=1']);
+  it('shows deletes with a key, truncates, and other schemas', () => {
+    expect(text(changeRow(change({ op: 'DELETE', tableSchema: 'billing', tableName: 'invoices' }), colors)))
+      .toEqual([['delete'], ['billing.invoices'], ['id=1'], ['row removed']]);
+    expect(text(changeRow(change({ op: 'TRUNCATE', rowKey: null }), colors))[3]).toEqual(['every row removed']);
   });
 });
 
 describe('formatTimeline', () => {
-  it('shows a header, one section per step with its count on the right, and a summary', () => {
+  it('shows a header, a bordered table per step with its count on the right, and a summary', () => {
     expect(formatTimeline(checkoutRecording(), { colors, width: 80 }).split('\n')).toEqual([
       '  PROPMASTER   Session #3 · checkout',
       ` qa_shop · 2026-10-07 10:00:00 → 10:00:09 (9s) · ${utcOffset(new Date('2026-10-07T10:00:00'))}`,
       '',
       ' STEP 1  Click Place Order                                             3 changes',
-      '   ~ update    inventory  product_id=3   stock 6 → 4',
-      '   + insert    orders     id=1',
-      "               customer_id=4 status='PENDING' total=84.5",
-      "               created_at='2026-10-07T05:32:08+00:00'",
-      '   + insert    payments   id=1',
-      "               order_id=1 amount=84.5 method='CARD'",
+      ' ┌────────┬───────────┬──────────────┬─────────────────────────────────────────┐',
+      ' │ Op     │ Table     │ Row          │ Changes                                 │',
+      ' ├────────┼───────────┼──────────────┼─────────────────────────────────────────┤',
+      ' │ update │ inventory │ product_id=3 │ stock 6 → 4                             │',
+      " │ insert │ orders    │ id=1         │ customer_id=4 status='PENDING'          │",
+      ' │        │           │              │ total=84.5                              │',
+      " │        │           │              │ created_at='2026-10-07T05:32:08+00:00'  │",
+      " │ insert │ payments  │ id=1         │ order_id=1 amount=84.5 method='CARD'    │",
+      ' └────────┴───────────┴──────────────┴─────────────────────────────────────────┘',
       '',
       ' STEP 2  Open order page                                               0 changes',
       '   no database changes',
@@ -90,6 +78,14 @@ describe('formatTimeline', () => {
       ` ${'─'.repeat(78)}`,
       ' 3 changes · 3 tables · 2 inserts · 1 update',
     ]);
+  });
+
+  it('lines up the columns of every step', () => {
+    const rec = checkoutRecording();
+    rec.steps[2]!.changes.push(change({ op: 'UPDATE', tableName: 'x', rowKey: { id: 2 }, oldValues: { a: 1 }, newValues: { a: 2 } }));
+    const borders = formatTimeline(rec, { colors, width: 80 }).split('\n').filter((l) => l.startsWith(' ┌'));
+    expect(borders).toHaveLength(2);
+    expect(borders[0]).toBe(borders[1]);
   });
 
   it('shows a running session, snapshot mode, notes and hidden changes', () => {
@@ -102,12 +98,15 @@ describe('formatTimeline', () => {
     expect(text).toContain('· 2 changes hidden by filters');
   });
 
-  it('stays within the line width', () => {
-    for (const line of formatTimeline(checkoutRecording(), { colors, width: 60 }).split('\n')) {
-      expect(line.length).toBeLessThanOrEqual(60);
+  it('stays within the line width, even when narrow', () => {
+    for (const width of [60, 80, 120]) {
+      for (const line of formatTimeline(checkoutRecording(), { colors, width }).split('\n')) {
+        expect(line.length).toBeLessThanOrEqual(width);
+      }
     }
   });
 });
+
 
 describe('very long values', () => {
   const bigText = 'Lorem ipsum dolor sit amet. '.repeat(75); // about 2 KB
