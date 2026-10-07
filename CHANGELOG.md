@@ -2,6 +2,18 @@
 
 All notable changes to Propmaster. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Restyled terminal output** across the CLI: a PROPMASTER header, `STEP n` sections with counts on the right, changes in aligned columns with values on the lines below, a summary line, rule results with the breaking rows as a table, and consistent messages with a `→` next step. Output fits the terminal width.
+- The demo explains itself (it plays a tester) and runs in numbered stages; the Docker demo hides npm's setup output.
+
+### Fixed
+
+- Colour codes are no longer written when output is piped to a file (picocolors enables colour on every Windows process).
+- Piping into a program that stops reading early (`| head`) no longer prints an EPIPE stack trace.
+
 ## [0.1.0] - 2026-10-07
 
 The first release: **Tool 1, the DB Change Recorder**.

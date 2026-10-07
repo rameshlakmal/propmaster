@@ -44,24 +44,24 @@ afterAll(async () => {
 
 describe('propmaster CLI', () => {
   it('records a checkout from install to export, then uninstalls', async () => {
-    expect((await cli(['install'])).out).toContain('✔ Recorder installed. Watching 6 tables (6 new).');
-    expect((await cli(['record', 'start', 'CLI checkout'])).out).toMatch(/● Recording session #\d+ "CLI checkout" \(6 tables watched\)/);
-    expect((await cli(['record', 'step', 'Click Place Order'])).out).toContain('Step 1 · Click Place Order');
+    expect((await cli(['install'])).out).toContain(' ✔ Recorder installed · watching 6 tables (6 new)');
+    expect((await cli(['record', 'start', 'CLI checkout'])).out).toMatch(/ ● REC {2}Session #\d+ · CLI checkout +6 tables watched/);
+    expect((await cli(['record', 'step', 'Click Place Order'])).out).toMatch(/ STEP 1 {2}Click Place Order +recording/);
     await db.query('SELECT place_order(1, 3, 2)');
-    expect((await cli(['record', 'status'])).out).toMatch(/step 1 · Click Place Order/);
+    expect((await cli(['record', 'status'])).out).toContain('current step STEP 1 Click Place Order');
 
     const stop = await cli(['record', 'stop']);
     expect(stop.code).toBe(0);
-    expect(stop.out).toContain('Step 1 · Click Place Order · 4 changes');
-    expect(stop.out).toContain('~ UPDATE inventory product_id=3  stock: 6 → 4');
+    expect(stop.out).toMatch(/ STEP 1 {2}Click Place Order +4 changes/);
+    expect(stop.out).toMatch(/~ update +inventory +product_id=3 +stock 6 → 4/);
     expect(stop.out).toContain('total=84.50');
-    expect(stop.out).toContain('Total: 4 changes across 4 tables');
+    expect(stop.out).toContain(' 4 changes · 4 tables · 3 inserts · 1 update');
 
     const filtered = await cli(['record', 'show', '--table', 'orders,payments', '--op', 'insert']);
     expect(filtered.out).toContain('2 changes hidden by filters');
-    expect(filtered.out).not.toContain('UPDATE inventory');
+    expect(filtered.out).not.toContain('~ update');
 
-    expect((await cli(['record', 'list'])).out).toMatch(/#\d+\s+.*CLI checkout\s+\(4 changes\)/);
+    expect((await cli(['record', 'list'])).out).toMatch(/#\d+ +\d{4}-\d\d-\d\d \d\d:\d\d +CLI checkout +4 +trigger/);
 
     const html = join(home, 'report.html');
     expect((await cli(['record', 'export', '-o', html])).out).toContain(`✔ Wrote ${html}`);
@@ -76,7 +76,7 @@ describe('propmaster CLI', () => {
     expect(rows.every((r) => r.pass)).toBe(true);
 
     expect((await cli(['uninstall'])).out).toContain('Cancelled. Nothing was removed.'); // no TTY, no --yes
-    expect((await cli(['uninstall', '--yes'])).out).toContain('✔ Recorder removed.');
+    expect((await cli(['uninstall', '--yes'])).out).toContain(' ✔ Recorder removed');
   });
 
   it('records in snapshot mode as a read-only user', async () => {
@@ -86,14 +86,14 @@ describe('propmaster CLI', () => {
     const reader = urlAs('propmaster_reader');
 
     expect((await cli(['doctor'], reader)).out).toContain('Use snapshot mode');
-    expect((await cli(['record', 'start', 'RO', '--snapshot'], reader)).out).toMatch(/● Recording session #s\d+ "RO" in snapshot mode \(6 tables read\)/);
-    expect((await cli(['record', 'status'], reader)).out).toContain('in snapshot mode, step 0');
+    expect((await cli(['record', 'start', 'RO', '--snapshot'], reader)).out).toMatch(/ ● REC {2}Session #s\d+ · RO +snapshot mode · 6 tables read/);
+    expect((await cli(['record', 'status'], reader)).out).toMatch(/snapshot mode\n +current step STEP 0 /);
     await cli(['record', 'step', 'Order'], reader);
     await db.query('SELECT place_order(2, 2, 1)');
     const stop = await cli(['record', 'stop'], reader);
     expect(stop.out).toContain('snapshot mode');
-    expect(stop.out).toContain('Step 1 · Order · 4 changes');
-    expect((await cli(['record', 'list'], reader)).out).toMatch(/#s\d+.*RO\s+\(4 changes\) snapshot/);
+    expect(stop.out).toMatch(/ STEP 1 {2}Order +4 changes/);
+    expect((await cli(['record', 'list'], reader)).out).toMatch(/#s\d+ +.* RO +4 +snapshot/);
   });
 
   it('survives being killed in the middle of a snapshot step', async () => {
@@ -112,12 +112,12 @@ describe('propmaster CLI', () => {
       await new Promise((r) => setTimeout(r, delay));
       child.kill('SIGKILL');
       await exited;
-      expect((await cli(['record', 'status'], reader)).out).toContain('"Interrupted" in snapshot mode');
+      expect((await cli(['record', 'status'], reader)).out).toMatch(/Session #s\d+ · Interrupted +snapshot mode/);
     }
     await db.query('SELECT place_order(1, 1, 1)');
     const stop = await cli(['record', 'stop'], reader);
     expect(stop.code).toBe(0);
-    expect(stop.out).toContain('INSERT orders');
+    expect(stop.out).toMatch(/\+ insert +orders/);
     expect((await cli(['record', 'list'], reader)).out).toContain('Interrupted');
   });
 
@@ -130,14 +130,14 @@ describe('propmaster CLI', () => {
 
     const failed = await cli(['record', 'check', 'demo/rules.sql']);
     expect(failed.code).toBe(1);
-    expect(failed.out).toMatch(/Checking 4 rules from demo\/rules.sql against session #\d+ "Discount check"/);
-    expect(failed.out).toContain("✖ Order total is the items' price, with 10% off for 2 or more items  1 violation · checked 1 row of orders");
-    expect(failed.out).toContain('    order_id=1 total=84.50 expected=76.05');
-    expect(failed.out).toContain('✔ Payment amount matches the order total  checked 1 row of payments');
+    expect(failed.out).toMatch(/Session #\d+ · Discount check\n rule check · 4 rules from demo\/rules.sql/);
+    expect(failed.out).toMatch(/✖ Order total is the items' price, with 10% off for 2 or more items +1 violation in 1 row of orders/);
+    expect(failed.out).toMatch(/order_id +total +expected\n +1 +84\.50 +76\.05/);
+    expect(failed.out).toMatch(/✔ Payment amount matches the order total +1 row of payments/);
     expect(failed.out).toContain('3 passed · 1 failed');
 
     const passed = await cli(['record', 'check', 'demo/rules.sql', '--all-rows']);
-    expect(passed.out).toContain('against whole tables');
+    expect(passed.out).toContain('Whole tables');
 
     const missing = await cli(['record', 'check', 'nope.sql']);
     expect(missing.err).toContain("Can't find the rules file nope.sql.");

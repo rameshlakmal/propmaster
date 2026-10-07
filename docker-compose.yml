@@ -28,12 +28,15 @@ services:
       postgres:
         condition: service_healthy
     working_dir: /app
-    environment:
-      PROPMASTER_DATABASE_URL: postgres://propmaster:propmaster@postgres:5432/qa_shop
     volumes:
       - .:/app
       - demo_node_modules:/app/node_modules  # Linux packages, kept apart from the host's node_modules
-    command: sh -c "npm ci --no-audit --no-fund --loglevel=error && npx tsx scripts/demo.ts"
+    environment:
+      PROPMASTER_DATABASE_URL: postgres://propmaster:propmaster@postgres:5432/qa_shop
+      NPM_CONFIG_UPDATE_NOTIFIER: "false"
+    # npm's own output is hidden; the first run takes about half a minute to install packages.
+    command: >-
+      sh -c "echo ' Preparing the demo...'; npm ci --no-audit --no-fund --loglevel=error > /dev/null && npx tsx scripts/demo.ts"
 
 volumes:
   demo_node_modules:

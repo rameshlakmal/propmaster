@@ -1,66 +1,97 @@
-import pc from 'picocolors';
-import { formatDateTime, formatDuration, formatKey, formatPairs, formatTime, formatValue, plural, tableLabel, utcOffset } from './format.js';
-import { allChanges, type Change, type Recording } from './types.js';
-
-type Colors = Pick<typeof pc, 'bold' | 'dim' | 'green' | 'yellow' | 'red' | 'cyan' | 'magenta'>;
+import { brand, divider, makeStyle, pad, spread, visibleLength, wrapItems, type Colors, type Style } from '../core/ui.js';
+import { summarize } from './export/summary.js';
+import { formatDateTime, formatDuration, formatKey, formatValue, plural, tableLabel, utcOffset } from './format.js';
+import type { Change, Recording } from './types.js';
 
 const MAX_VALUE_LENGTH = 40;
+const INDENT = 3;          // where the operation starts
+const OP_WIDTH = 12;       // "! truncate" plus two spaces
+const VALUES_AT = INDENT + OP_WIDTH;
+const MAX_TABLE_WIDTH = 22;
 
-export function formatChange(change: Change, c: Colors = pc): string {
+const OP_LABEL = {
+  INSERT: (c: Colors) => c.green('+ insert'),
+  UPDATE: (c: Colors) => c.yellow('~ update'),
+  DELETE: (c: Colors) => c.red('- delete'),
+  TRUNCATE: (c: Colors) => c.magenta('! truncate'),
+} as const;
+
+function pairs(row: Record<string, unknown> | null, skip: Set<string>): string[] {
+  return Object.entries(row ?? {}).filter(([col]) => !skip.has(col)).map(([col, v]) => `${col}=${formatValue(v, MAX_VALUE_LENGTH)}`);
+}
+
+/** One change: the operation, table and key on the first line, then the values (dimmed) where they fit. */
+export function formatChangeLines(change: Change, s: Style, tableWidth: number): string[] {
+  const { c } = s;
   const keyCols = new Set(Object.keys(change.rowKey ?? {}));
   const key = formatKey(change) ?? c.dim('(no primary key)');
-  const table = c.bold(tableLabel(change));
+  // A table name longer than the column still keeps two spaces before the key.
+  const tableCell = c.bold(tableLabel(change));
+  const head = `${' '.repeat(INDENT)}${pad(OP_LABEL[change.op](c), OP_WIDTH)}${tableCell}${' '.repeat(Math.max(2, tableWidth + 2 - tableLabel(change).length))}`;
 
   switch (change.op) {
     case 'INSERT':
-      return `${c.green('+ INSERT')} ${table} ${key}  ${c.dim(formatPairs(change.newValues, keyCols, MAX_VALUE_LENGTH))}`;
+      return [`${head}${key}`, ...wrapItems(pairs(change.newValues, keyCols).map((p) => c.dim(p)), VALUES_AT, s.width)];
     case 'UPDATE': {
-      const diffs = Object.keys(change.newValues ?? {}).map((col) =>
-        `${col}: ${formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH)} → ${c.yellow(formatValue(change.newValues?.[col], MAX_VALUE_LENGTH))}`);
-      return `${c.yellow('~ UPDATE')} ${table} ${key}  ${diffs.join(', ')}`;
+      const cols = Object.keys(change.newValues ?? {});
+      const before = (col: string) => formatValue(change.oldValues?.[col], MAX_VALUE_LENGTH);
+      const after = (col: string) => c.yellow(formatValue(change.newValues?.[col], MAX_VALUE_LENGTH));
+      const oneLine = `${head}${key}   ${cols.map((col) => `${col} ${before(col)} → ${after(col)}`).join(', ')}`;
+      if (visibleLength(oneLine) <= s.width || cols.length === 0) return [oneLine];
+
+      // One column per line; when even that is too wide, the new value goes under the old one.
+      const at = ' '.repeat(VALUES_AT);
+      return [`${head}${key}`, ...cols.flatMap((col) => {
+        const line = `${at}${col} ${before(col)} → ${after(col)}`;
+        return visibleLength(line) <= s.width ? [line] : [`${at}${col} ${before(col)}`, `${at}${' '.repeat(col.length)} → ${after(col)}`];
+      })];
     }
-    case 'DELETE': {
+    case 'DELETE':
       // Without a primary key, the old values are the only way to tell which row went.
-      const detail = change.rowKey ? '' : `  ${c.dim(formatPairs(change.oldValues, new Set(), MAX_VALUE_LENGTH))}`;
-      return `${c.red('- DELETE')} ${table} ${key}${detail}`;
-    }
+      return change.rowKey ? [`${head}${key}`] : [`${head}${key}`, ...wrapItems(pairs(change.oldValues, new Set()).map((p) => c.dim(p)), VALUES_AT, s.width)];
     case 'TRUNCATE':
-      return `${c.magenta('! TRUNCATE')} ${table}  ${c.dim('(every row removed)')}`;
+      return [`${head}${c.dim('every row removed')}`];
   }
 }
 
 export interface TimelineOptions {
   colors?: Colors;
+  width?: number;
   /** Changes hidden by filters, mentioned in the footer. */
   hidden?: number;
 }
 
 /** Renders a recording as a step-by-step timeline for the terminal. */
-export function formatTimeline(rec: Recording, { colors: c = pc, hidden = 0 }: TimelineOptions = {}): string {
+export function formatTimeline(rec: Recording, { colors, width, hidden = 0 }: TimelineOptions = {}): string {
+  const s = makeStyle({ colors, width });
+  const { c } = s;
   const lines: string[] = [];
-  const when = rec.stoppedAt
-    ? `${formatDateTime(rec.startedAt)} → ${formatTime(rec.stoppedAt)} (${formatDuration(rec.startedAt, rec.stoppedAt)})`
-    : `started ${formatDateTime(rec.startedAt)} · ${c.red('● recording')}`;
-  const mode = rec.mode === 'snapshot' ? ' · snapshot mode' : '';
-  lines.push(c.bold(`Session #${rec.id} · ${rec.name}`) + c.dim(` · ${rec.database}${mode}`));
-  lines.push(c.dim(`${when} · times in ${utcOffset(rec.startedAt)}`), '');
 
-  for (const note of rec.notes) lines.push(c.yellow(`! ${note}`));
-  if (rec.notes.length > 0) lines.push('');
+  const when = rec.stoppedAt
+    ? `${formatDateTime(rec.startedAt)} → ${formatDateTime(rec.stoppedAt).slice(11)} (${formatDuration(rec.startedAt, rec.stoppedAt)})`
+    : `started ${formatDateTime(rec.startedAt)}`;
+  const details = [rec.database, when, utcOffset(rec.startedAt), ...(rec.mode === 'snapshot' ? ['snapshot mode'] : [])];
+  lines.push(` ${brand(c)}  ${c.bold(`Session #${rec.id}`)} · ${rec.name}`);
+  lines.push(` ${c.dim(details.join(' · '))}${rec.stoppedAt ? '' : `  ${c.red('● recording')}`}`);
+  for (const note of rec.notes) lines.push(` ${c.yellow(`! ${note}`)}`);
+
+  const changes = rec.steps.flatMap((st) => st.changes);
+  const tableWidth = Math.min(MAX_TABLE_WIDTH, Math.max(5, ...changes.map((ch) => tableLabel(ch).length)));
 
   for (const step of rec.steps) {
     // Step 0 collects changes made before the first named step; hide it when empty.
     if (step.seq === 0 && step.changes.length === 0) continue;
-
-    lines.push(`${c.cyan(`Step ${step.seq}`)} · ${c.bold(step.name)} ${c.dim(`· ${plural(step.changes.length, 'change')}`)}`);
-    if (step.changes.length === 0) lines.push(c.dim('  (no database changes)'));
-    for (const change of step.changes) lines.push(`  ${formatChange(change, c)}`);
     lines.push('');
+    lines.push(spread(` ${c.cyan(c.bold(`STEP ${step.seq}`))}  ${c.bold(step.name)}`, c.dim(plural(step.changes.length, 'change')), s.width));
+    if (step.changes.length === 0) lines.push(`${' '.repeat(INDENT)}${c.dim('no database changes')}`);
+    for (const change of step.changes) lines.push(...formatChangeLines(change, s, tableWidth));
   }
 
-  const all = allChanges(rec);
-  const tables = new Set(all.map(tableLabel));
-  const filtered = hidden > 0 ? ` · ${plural(hidden, 'change')} hidden by filters` : '';
-  lines.push(c.dim(`Total: ${plural(all.length, 'change')} across ${plural(tables.size, 'table')}${filtered}`));
+  const sum = summarize(rec);
+  const parts = [plural(sum.changes, 'change'), plural(sum.tables, 'table')];
+  for (const op of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] as const) {
+    if (sum.byOp[op]) parts.push(plural(sum.byOp[op], op.toLowerCase()));
+  }
+  lines.push('', divider(s), ` ${parts.join(' · ')}${hidden ? c.yellow(` · ${plural(hidden, 'change')} hidden by filters`) : ''}`);
   return lines.join('\n');
 }

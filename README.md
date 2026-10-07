@@ -10,24 +10,34 @@ Propmaster is a test-data toolkit for QA engineers, built on PostgreSQL. Tool 1,
 
 ```
 $ propmaster record start "Checkout happy path"
+ ● REC  Session #12 · Checkout happy path                       6 tables watched
+   → before each test step: propmaster record step "<name>"
+   → when you are done:    propmaster record stop
 $ propmaster record step "Click Place Order"
    ...the tester clicks through the app...
+$ propmaster record step "Cancel the order"
 $ propmaster record stop
+ ■ Stopped session #12
 
-Session #1 · Checkout happy path · qa_shop
-2026-10-07 11:01:59 → 11:02:27 (28s) · times in UTC+05:30
+  PROPMASTER   Session #12 · Checkout happy path
+ qa_shop · 2026-10-07 11:01:59 → 11:02:27 (28s) · UTC+05:30
 
-Step 1 · Click Place Order · 4 changes
-  ~ UPDATE inventory product_id=3  stock: 6 → 4
-  + INSERT orders id=1  customer_id=1 status='PENDING' total=84.50 created_at='2026-10-07T05:32:08.846939+00:00'
-  + INSERT order_items id=1  order_id=1 product_id=3 qty=2 unit_price=42.25
-  + INSERT payments id=1  order_id=1 amount=84.50 method='CARD' status='AUTHORIZED'
+ STEP 1  Click Place Order                                             4 changes
+   ~ update    inventory    product_id=3   stock 20 → 18
+   + insert    orders       id=54
+               customer_id=45 status='PENDING' total=84.50
+               created_at='2026-10-07T11:02:05.586281+00:00'
+   + insert    order_items  id=54
+               order_id=54 product_id=3 qty=2 unit_price=42.25
+   + insert    payments     id=54
+               order_id=54 amount=84.50 method='CARD' status='AUTHORIZED'
 
-Step 2 · Cancel the order · 2 changes
-  ~ UPDATE orders id=1  status: 'PENDING' → 'CANCELLED'
-  ~ UPDATE inventory product_id=3  stock: 4 → 6
+ STEP 2  Cancel the order                                              2 changes
+   ~ update    orders       id=54   status 'PENDING' → 'CANCELLED'
+   ~ update    inventory    product_id=3   stock 18 → 20
 
-Total: 6 changes across 4 tables
+ ──────────────────────────────────────────────────────────────────────────────
+ 6 changes · 4 tables · 3 inserts · 3 updates
 ```
 
 ## Why
@@ -138,15 +148,18 @@ SELECT p.order_id, p.amount, o.total
 
 ```
 $ propmaster record check demo/rules.sql
-Checking 4 rules from demo/rules.sql against session #5 "Checkout on build v2"
+  PROPMASTER   Session #13 · Checkout on build v2
+ rule check · 4 rules from demo/rules.sql
 
-✔ Order total is the items' price, with 10% off for 2 or more items  checked 1 row of orders
-✖ Payment amount matches the order total  1 violation · checked 1 row of payments
-    order_id=8 amount=84.50 total=76.05
-✔ Every order in the session has exactly one payment  checked 1 row of orders
-✔ Items are charged at the product's current price  checked 1 row of order_items
+ ✔ Order total is the items' price, with 10% off for 2 or more items  1 row of orders
+ ✖ Payment amount matches the order total       1 violation in 1 row of payments
+     order_id   amount   total
+     55         84.50    76.05
+ ✔ Every order in the session has exactly one payment            1 row of orders
+ ✔ Items are charged at the product's current price         1 row of order_items
 
-3 passed · 1 failed
+ ──────────────────────────────────────────────────────────────────────────────
+ 3 passed · 1 failed
 ```
 
 - The exit code is 1 when a rule fails or can't run, so `record check` can gate a CI pipeline.

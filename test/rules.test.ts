@@ -94,16 +94,20 @@ describe('rule report', () => {
     { rule: rule('Typo', 30), status: 'error', scope: {}, violations: [], violationCount: 0, error: 'column "amout" does not exist' },
   ];
 
-  it('shows each rule, the rows that break it, and a summary', () => {
-    expect(formatRuleResults(results, { colors }).split('\n')).toEqual([
-      '✔ Total follows the discount  checked 2 rows of orders',
-      '✖ Payment matches the total  3 violations · checked 2 rows of payments',
-      '    order_id=7 amount=84.50 total=76.05',
-      '    …and 2 more',
-      '⊘ Stock comes back on cancel  nothing to check: the session touched no inventory rows',
-      '! Typo  could not run (line 30): column "amout" does not exist',
+  it('shows each rule with what it checked, the rows that break it as a table, and a summary', () => {
+    expect(formatRuleResults(results, { colors, width: 80 }).split('\n')).toEqual([
+      ' ✔ Total follows the discount                                   2 rows of orders',
+      ' ✖ Payment matches the total                  3 violations in 2 rows of payments',
+      '     order_id   amount   total',
+      '     7          84.50    76.05',
+      '     …and 2 more',
+      ' ⊘ Stock comes back on cancel                                   nothing to check',
+      '     the session touched no inventory rows',
+      ' ! Typo',
+      '     could not run (line 30): column "amout" does not exist',
       '',
-      '1 passed · 1 failed · 1 skipped · 1 could not run',
+      ` ${'─'.repeat(78)}`,
+      ' 1 passed · 1 failed · 1 skipped · 1 could not run',
     ]);
     expect(tally(results)).toEqual({ pass: 1, fail: 1, skipped: 1, error: 1 });
   });

@@ -5,9 +5,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Command, Option } from 'commander';
-import pc from 'picocolors';
 import { describeDatabase, resolveDatabaseUrl, withDb, type Db } from './core/db.js';
 import { explainError, UserError } from './core/errors.js';
+import { brand, hint, icons, makeStyle, spread, table } from './core/ui.js';
 import { diagnose } from './recorder/doctor.js';
 import { toHtml } from './recorder/export/html.js';
 import { toMarkdown } from './recorder/export/markdown.js';
@@ -19,9 +19,16 @@ import { formatRuleResults, tally } from './recorder/rules-report.js';
 import * as snapshot from './recorder/snapshot.js';
 import { formatTimeline } from './recorder/timeline.js';
 import * as trigger from './recorder/trigger.js';
+import { formatDateTime } from './recorder/format.js';
 import type { Recording, SessionSummary } from './recorder/types.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
+
+// `propmaster record show | head` closes the pipe early: stop quietly instead of printing a stack trace.
+process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') process.exit(0);
+  throw err;
+});
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -49,10 +56,15 @@ function run<A extends unknown[]>(fn: (ctx: Context, ...args: A) => Promise<void
 async function confirm(word: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`Type ${pc.bold(word)} to confirm: `);
+  const answer = await rl.question(` Type ${c.bold(word)} to confirm: `);
   rl.close();
   return answer.trim() === word;
 }
+
+const ui = makeStyle();
+const c = ui.c;
+const i = icons(c);
+const say = (...lines: string[]) => console.log(lines.join('\n'));
 
 const list = (value: string, previous: string[] = []) => [...previous, ...value.split(',').map((v) => v.trim()).filter(Boolean)];
 
@@ -142,8 +154,9 @@ program
   .action(run(async ({ db }) => {
     const attached = await trigger.install(db);
     const s = await trigger.status(db);
-    console.log(`${pc.green('✔')} Recorder installed. Watching ${s.watchedTables} tables (${attached} new).`);
-    if (s.excludedTables.length) console.log(pc.dim(`  Excluded: ${s.excludedTables.join(', ')}`));
+    say(` ${i.ok} Recorder installed ${c.dim(`· watching ${s.watchedTables} tables (${attached} new)`)}`);
+    if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);
+    say(hint(c, 'next: propmaster record start "My test"'));
   }));
 
 program
@@ -152,15 +165,15 @@ program
   .option('-y, --yes', 'skip the confirmation prompt')
   .action(run(async ({ db }, opts: { yes?: boolean }) => {
     if (!(await trigger.isInstalled(db))) {
-      console.log('The recorder is not installed. Nothing to remove.');
+      say(` ${i.idle} The recorder is not installed. Nothing to remove.`);
       return;
     }
     if (!opts.yes && !(await confirm('uninstall'))) {
-      console.log('Cancelled. Nothing was removed. (Use --yes in scripts.)');
+      say(` ${i.warn} Cancelled. Nothing was removed.`, hint(c, 'in scripts, add --yes'));
       return;
     }
     await trigger.uninstall(db);
-    console.log(`${pc.green('✔')} Recorder removed. The _propmaster schema and all its triggers are gone.`);
+    say(` ${i.ok} Recorder removed ${c.dim('· the _propmaster schema and all its triggers are gone')}`);
   }));
 
 program
@@ -168,14 +181,15 @@ program
   .description('Check what your DB user can do, and which mode to use')
   .action(run(async ({ db }) => {
     const report = await diagnose(db);
-    const icon = { ok: pc.green('✔'), warn: pc.yellow('!'), fail: pc.red('✖') };
-    for (const f of report.findings) console.log(`${icon[f.level]} ${f.text}`);
-    console.log('');
-    if (report.recommended === 'trigger') console.log(`Use ${pc.bold('trigger mode')}: \`propmaster install\`, then \`propmaster record start\`.`);
-    else if (report.recommended === 'snapshot') console.log(`Use ${pc.bold('snapshot mode')}: \`propmaster record start --snapshot\`.`);
-    else console.log(pc.red('Neither mode can run with this DB user.'));
+    const icon = { ok: i.ok, warn: i.warn, fail: i.fail };
+    say(` ${brand(c)}  ${c.bold('Doctor')}`, '');
+    for (const f of report.findings) say(` ${icon[f.level]} ${f.text}`);
+    say('');
+    if (report.recommended === 'trigger') say(` ${c.bold('Use trigger mode.')}`, hint(c, 'propmaster install, then propmaster record start "My test"'));
+    else if (report.recommended === 'snapshot') say(` ${c.bold('Use snapshot mode.')} ${c.dim('It needs only read access.')}`, hint(c, 'propmaster record start "My test" --snapshot'));
+    else say(` ${c.red(c.bold('Neither mode can run with this DB user.'))}`);
     if (report.grants.length) {
-      console.log(`\nFor trigger mode, ask a DBA for:\n${report.grants.map((g) => `  ${g}`).join('\n')}`);
+      say('', ' For trigger mode, ask a DBA to run:', ...report.grants.map((g) => `   ${c.cyan(g)}`));
     }
   }));
 
@@ -191,23 +205,23 @@ record
   .option('--exclude <tables>', 'snapshot mode: tables to leave out (comma-separated, patterns allowed)', list)
   .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(snapshot.DEFAULT_MAX_ROWS).argParser(Number))
   .action(run(async (ctx, name: string, opts: { snapshot?: boolean; exclude?: string[]; maxRows: number }) => {
-    const hint = pc.dim('  Mark steps with `propmaster record step "<name>"`, then `propmaster record stop`.');
+    const next = [hint(c, 'before each test step: propmaster record step "<name>"'), hint(c, 'when you are done:    propmaster record stop')];
+    const recording = (id: string, detail: string) => spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${id}`)} · ${name}`, c.dim(detail), ui.width);
     const active = await activeSnapshotFor(ctx.identity);
     if (active) throw new UserError(`Snapshot session ${active.id} is already recording.`, 'Stop it first: `propmaster record stop`.');
 
     if (opts.snapshot) {
       const s = await snapshot.startSnapshot(ctx.db, ctx.identity, name, { exclude: opts.exclude, maxRows: opts.maxRows });
-      console.log(`${pc.red('●')} Recording session #${s.id} "${name}" in snapshot mode (${s.tables} tables read)`);
-      if (s.skipped.length) console.log(pc.yellow(`  Not watched (over ${opts.maxRows} rows): ${s.skipped.join(', ')}`));
-      console.log(hint);
+      say(recording(s.id, `snapshot mode · ${s.tables} tables read`));
+      if (s.skipped.length) say(`   ${c.yellow(`! not watched (over ${opts.maxRows} rows): ${s.skipped.join(', ')}`)}`);
+      say(...next);
       return;
     }
 
     if (opts.exclude) throw new UserError('--exclude is for snapshot mode.', 'In trigger mode use `propmaster record exclude <table>`.');
     const id = await trigger.start(ctx.db, name);
     const { watchedTables } = await trigger.status(ctx.db);
-    console.log(`${pc.red('●')} Recording session #${id} "${name}" (${watchedTables} tables watched)`);
-    console.log(hint);
+    say(recording(id, `${watchedTables} tables watched`), ...next);
   }));
 
 record
@@ -218,7 +232,7 @@ record
     const seq = (await activeSnapshotFor(ctx.identity))
       ? await snapshot.stepSnapshot(ctx.db, ctx.identity, name)
       : await trigger.step(ctx.db, name);
-    console.log(`${pc.cyan(`Step ${seq}`)} · ${name}`);
+    say(spread(` ${c.cyan(c.bold(`STEP ${seq}`))}  ${c.bold(name)}`, c.dim('recording'), ui.width));
   }));
 
 addFilterOptions(record
@@ -229,7 +243,7 @@ addFilterOptions(record
     const rec = (await activeSnapshotFor(ctx.identity))
       ? await snapshot.stopSnapshot(ctx.db, ctx.identity)
       : await trigger.getRecording(ctx.db, await trigger.stop(ctx.db));
-    console.log(`${pc.green('■')} Stopped.\n`);
+    say(` ${i.stop} Stopped session #${rec!.id}`, '');
     printTimeline(rec!, opts);
   }));
 
@@ -239,14 +253,16 @@ record
   .action(run(async (ctx) => {
     const snap = await activeSnapshotFor(ctx.identity);
     if (snap) {
-      console.log(`${pc.red('●')} Recording session #${snap.id} "${snap.name}" in snapshot mode, step ${snap.stepSeq} · ${snap.stepName}`);
+      say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${snap.id}`)} · ${snap.name}`, c.dim('snapshot mode'), ui.width),
+        `   ${c.dim('current step')} ${c.cyan(`STEP ${snap.stepSeq}`)} ${snap.stepName}`);
       return;
     }
     const s = await trigger.status(ctx.db);
-    if (!s.installed) console.log('Not recording. The recorder is not installed (`propmaster install`, or `record start --snapshot`).');
-    else if (!s.active) console.log(`Not recording. ${s.watchedTables} tables are watched.`);
-    else console.log(`${pc.red('●')} Recording session #${s.active.id} "${s.active.name}", step ${s.active.stepSeq} · ${s.active.stepName}`);
-    if (s.excludedTables.length) console.log(pc.dim(`  Excluded: ${s.excludedTables.join(', ')}`));
+    if (!s.installed) say(` ${i.idle} Not recording. The recorder is not installed.`, hint(c, 'propmaster install, or propmaster record start --snapshot'));
+    else if (!s.active) say(` ${i.idle} Not recording ${c.dim(`· ${s.watchedTables} tables watched`)}`);
+    else say(spread(` ${i.rec} ${c.red(c.bold('REC'))}  ${c.bold(`Session #${s.active.id}`)} · ${s.active.name}`, c.dim(`${s.watchedTables} tables watched`), ui.width),
+      `   ${c.dim('current step')} ${c.cyan(`STEP ${s.active.stepSeq}`)} ${s.active.stepName}`);
+    if (s.excludedTables.length) say(`   ${c.dim(`excluded: ${s.excludedTables.join(', ')}`)}`);
   }));
 
 addFilterOptions(record
@@ -264,12 +280,18 @@ record
   .description('List recent sessions')
   .action(run(async (ctx) => {
     const sessions = await allSessions(ctx);
-    if (sessions.length === 0) console.log('No sessions recorded yet.');
-    for (const s of sessions) {
-      const state = s.stoppedAt ? '' : pc.red(' ● recording');
-      const mode = s.mode === 'snapshot' ? pc.dim(' snapshot') : '';
-      console.log(`${`#${s.id}`.padEnd(6)} ${s.startedAt.toLocaleString('en-GB')}  ${s.name}  ${pc.dim(`(${s.changeCount} changes)`)}${mode}${state}`);
+    if (sessions.length === 0) {
+      say(` ${i.idle} No sessions recorded yet.`, hint(c, 'propmaster record start "My test"'));
+      return;
     }
+    const shortName = (n: string) => (n.length > 40 ? `${n.slice(0, 39)}…` : n);
+    say(...table(c, ['SESSION', 'STARTED', 'NAME', 'CHANGES', 'MODE'], sessions.map((s) => [
+      c.bold(`#${s.id}`),
+      formatDateTime(s.startedAt).slice(0, 16),
+      shortName(s.name),
+      String(s.changeCount),
+      `${s.mode}${s.stoppedAt ? '' : ` ${c.red('● recording')}`}`,
+    ])));
   }));
 
 const EXTENSIONS = { html: 'html', md: 'md', sql: 'sql' } as const;
@@ -319,7 +341,7 @@ addFilterOptions(record
     }
     const file = resolve(opts.output ?? `propmaster-session-${rec.id}.${EXTENSIONS[opts.format]}`);
     await writeFile(file, content, 'utf8');
-    console.log(`${pc.green('✔')} Wrote ${file}${masked ? '' : pc.yellow(' (not masked)')}`);
+    say(` ${i.ok} Wrote ${c.bold(file)}${masked ? c.dim(' · sensitive values masked') : c.yellow(' · not masked')}`);
     if (opts.open) openFile(file);
   }));
 
@@ -342,8 +364,8 @@ record
     if (!existsSync(file)) throw new UserError(`Can't find the rules file ${file}.`);
     const rules = parseRules(await readFile(file, 'utf8'), file);
     const rec = opts.allRows && session === undefined ? null : await loadRecording(ctx, session);
-    const target = rec ? `session #${rec.id} "${rec.name}"` : 'whole tables';
-    console.log(`Checking ${rules.length} rule${rules.length === 1 ? '' : 's'} from ${file} against ${target}\n`);
+    const target = rec ? `${c.bold(`Session #${rec.id}`)} · ${rec.name}` : c.bold('Whole tables');
+    say(` ${brand(c)}  ${target}`, ` ${c.dim(`rule check · ${rules.length} rule${rules.length === 1 ? '' : 's'} from ${file}`)}`, '');
 
     const results = await checkRules(ctx.db, rec, rules, { allRows: opts.allRows, limit: opts.limit, timeout: opts.timeout });
     console.log(formatRuleResults(results, { allRows: opts.allRows }));
@@ -359,7 +381,7 @@ record
     const id = session.replace(/^#/, '');
     if (/^s\d+$/.test(id)) await snapshot.deleteSnapshot(id);
     else await trigger.deleteSession(ctx.db, id);
-    console.log(`${pc.green('✔')} Deleted session #${id}.`);
+    say(` ${i.ok} Deleted session #${id}`);
   }));
 
 record
@@ -368,7 +390,7 @@ record
   .requiredOption('--older-than <interval>', 'a Postgres interval, e.g. "7 days" or "12 hours"')
   .action(run(async ({ db }, opts: { olderThan: string }) => {
     const n = await trigger.prune(db, opts.olderThan);
-    console.log(`${pc.green('✔')} Deleted ${n} session${n === 1 ? '' : 's'} older than ${opts.olderThan}.`);
+    say(` ${i.ok} Deleted ${n} session${n === 1 ? '' : 's'} ${c.dim(`older than ${opts.olderThan}`)}`);
   }));
 
 record
@@ -377,7 +399,7 @@ record
   .description('Stop watching busy or irrelevant tables (trigger mode)')
   .action(run(async ({ db }, tables: string[]) => {
     for (const t of tables) await trigger.excludeTable(db, t);
-    console.log(`${pc.green('✔')} No longer watching: ${tables.join(', ')}`);
+    say(` ${i.ok} No longer watching ${c.bold(tables.join(', '))}`);
   }));
 
 record
@@ -386,16 +408,16 @@ record
   .description('Watch previously excluded tables again (trigger mode)')
   .action(run(async ({ db }, tables: string[]) => {
     for (const t of tables) await trigger.includeTable(db, t);
-    console.log(`${pc.green('✔')} Watching again: ${tables.join(', ')}`);
+    say(` ${i.ok} Watching again ${c.bold(tables.join(', '))}`);
   }));
 
 program.parseAsync().catch((err: unknown) => {
   const e = explainError(err);
   if (e instanceof UserError) {
-    console.error(pc.red(`✖ ${e.message}`));
-    if (e.hint) console.error(pc.dim(`  ${e.hint}`));
+    console.error(` ${i.fail} ${c.red(e.message)}`);
+    if (e.hint) console.error(hint(c, e.hint));
   } else {
-    console.error(pc.red(`✖ ${e instanceof Error ? e.message : String(e)}`));
+    console.error(` ${i.fail} ${c.red(e instanceof Error ? e.message : String(e))}`);
     if (process.env.PROPMASTER_DEBUG && e instanceof Error) console.error(e.stack);
   }
   process.exitCode = 1;
