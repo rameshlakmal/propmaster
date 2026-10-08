@@ -474,3 +474,75 @@ body {
 .json-part {
   max-height: 9em;
 }
+
+/* ---------- Find data ---------- */
+
+.find-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  margin-bottom: var(--space-5);
+}
+
+@media (max-width: 900px) {
+  .find-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.recipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 560px;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+}
+
+.recipe-item {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+}
+
+.recipe-item:hover {
+  background: var(--gray-a3);
+}
+
+.recipe-item[aria-selected='true'] {
+  background: var(--accent-a3);
+  box-shadow: inset 2px 0 0 var(--accent-9);
+}
+
+.recipe-item:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: -2px;
+}
+
+.recipe-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+
+.row-held td {
+  color: var(--gray-10);
+}
+
+.claim-done {
+  background: var(--grass-a2);
+}

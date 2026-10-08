@@ -16,6 +16,16 @@ const types = {
   },
 } as pg.CustomTypesConfig;
 
+const TEXT_DATE_OIDS = new Set([1082, 1083, 1114, 1184, 1266]); // date, time, timestamp, timestamptz, timetz
+
+/** For showing query results as Postgres prints them: dates and times stay text instead of becoming JS Dates. */
+export const displayTypes = {
+  getTypeParser(oid: number, format?: 'text' | 'binary') {
+    if (TEXT_DATE_OIDS.has(oid)) return (value: string) => value;
+    return types.getTypeParser(oid, format);
+  },
+} as pg.CustomTypesConfig;
+
 /** The connection string from --url, or the PROPMASTER_DATABASE_URL environment variable. */
 export function resolveDatabaseUrl(cliUrl?: string): string {
   const url = cliUrl ?? process.env.PROPMASTER_DATABASE_URL;

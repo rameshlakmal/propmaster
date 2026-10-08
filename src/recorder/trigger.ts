@@ -50,7 +50,8 @@ export async function uninstall(db: Db): Promise<void> {
 }
 
 export async function isInstalled(db: Db): Promise<boolean> {
-  const { rows } = await db.query<{ ok: boolean }>("SELECT to_regnamespace('_propmaster') IS NOT NULL AS ok");
+  // The state table, not the schema: the Finder creates the schema for claims without the recorder.
+  const { rows } = await db.query<{ ok: boolean }>("SELECT to_regclass('_propmaster.state') IS NOT NULL AS ok");
   return rows[0]!.ok;
 }
 

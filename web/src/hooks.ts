@@ -6,12 +6,13 @@ export type Route =
   | { page: 'record' }
   | { page: 'sessions'; id?: string }
   | { page: 'rules' }
+  | { page: 'find' }
   | { page: 'setup' };
 
 function parseHash(): Route {
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
   if (page === 'sessions') return { page, id: id || undefined };
-  if (page === 'rules' || page === 'setup') return { page };
+  if (page === 'rules' || page === 'find' || page === 'setup') return { page };
   return { page: 'record' };
 }
 

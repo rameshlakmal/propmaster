@@ -6,6 +6,12 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ### Added
 
+- **Tool 2: Test Data Finder.** Recipes are named, tagged SQL queries in `.sql` files (`-- recipe:`, `-- tags:`, `-- param:`, `-- claim:` header lines) that find test data in a given state. `propmaster find` lists them; `propmaster find <words> -p name=value` runs one. Parameters are typed and sent as bind values. Recipes run in a read-only transaction with a time limit. Example recipes: `demo/recipes/shop.sql`.
+- **Claims**: `find --claim [n]` claims the first free rows for `--for 2h` (default) with an optional `--note`, so other testers on the same database don't use them. Rows others hold are listed last and never handed out; claiming is atomic, and claims expire by themselves. `claims` lists them; `claims add`, `extend`, `release [--mine]` and `clear-expired` manage them. Claims are stored in `_propmaster.claims` (`sql/finder.sql`), created on the first claim.
+- `find --json` for automated tests: the free rows, and the claims you got with each claimed row's values. Exit code 1 when there's no free row.
+- **`recipes check`** reports each recipe as working, finding nothing, or broken (for example after a migration renamed a column). Exit code 1 if one is broken; `--strict` also fails on recipes that find nothing.
+- **Find data page** in the web app: search recipes, fill in parameters, find, claim a row with one click, see and release everyone's claims, and check all recipes.
+
 - **Web app** (`propmaster ui`): set up connections with a live access check, install the recorder, record with a Start button and one step per Enter, watch changes appear live, browse and search sessions, open any change for its before and after values, export, and edit and run rules. Light and dark mode. Runs on 127.0.0.1 only, with a secret token per run, a Host-header check (DNS rebinding) and an Origin check. Saved connections live in `~/.propmaster/ui.json`.
 - **Rename steps** after recording (or during): the pencil next to a step name in the web app, or `record rename <session> <step> <name>`. Works for typed steps, auto steps (kept against the step's first change) and snapshot sessions.
 - **Sessions list: delete and pages.** Tick sessions to delete several at once (with a confirmation that counts them), or delete one from its row; a session still recording can't be deleted. The list is paged, 20 a page.
@@ -19,6 +25,8 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 - `record status` and the web app say when the recorder in a database is from an older version, and the Setup page has an **Upgrade recorder** button (`propmaster install` upgrades too; recordings are kept).
 
 ### Changed
+
+- `propmaster uninstall` now says it removes recordings **and claims**. The recorder counts as installed only when its own tables exist, not just the `_propmaster` schema (which the Finder may create for claims).
 
 - **Easier-to-read changes in the web app.** Each change is laid out as labelled fields instead of one long `column=value` line: the new values of an insert, *old → new* for an update (old struck through, new highlighted), and what a deleted row held. Text shows without SQL quotes, times in local format (the exact value in the tooltip), NULL and empty text quietly, numbers in tabular figures, and true/false as small tags. Expanding a change still shows every column exactly as stored. On a phone, a step's table scrolls sideways in its card.
 

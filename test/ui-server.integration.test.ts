@@ -193,6 +193,54 @@ describe('recording through the web app', () => {
   });
 });
 
+describe('finding data through the web app', () => {
+  it('asks for a recipe folder first, and accepts a path pasted with quotes', async () => {
+    expect((await call('GET', '/api/recipes')).data).toEqual({ path: '', recipes: [], error: null });
+    expect((await call('POST', '/api/find', { recipe: 'x' })).data.error.message).toBe('Choose a recipe folder first.');
+    expect((await call('PUT', '/api/recipes', { path: join(dir, 'missing') })).data.error.message).toMatch(/^Can't find /);
+    const set = await call('PUT', '/api/recipes', { path: `"${join(process.cwd(), 'demo', 'recipes')}"` });
+    expect(set.data).toEqual({ ok: true, path: join(process.cwd(), 'demo', 'recipes') });
+    const list = (await call('GET', '/api/recipes')).data;
+    expect(list.recipes).toHaveLength(6);
+    expect((await call('GET', '/api/config')).data.profiles[0].recipesPath).toBe(join(process.cwd(), 'demo', 'recipes'));
+  });
+
+  it('finds rows, claims a picked one or the first free one, and releases them', async () => {
+    const found = (await call('POST', '/api/find', { recipe: 'product-in-a-price-range', params: { min_price: '20', max_price: '' } })).data;
+    expect(found.result.rows.map((r: { key: string }) => r.key)).toEqual(['2', '3']);
+    expect(found.result.params).toEqual({ min_price: '20', max_price: '1000000' });
+
+    const picked = (await call('POST', '/api/find/claim', { recipe: 'product-in-a-price-range', params: { min_price: '20' }, key: '3', duration: '30m', note: 'TC-1' })).data;
+    expect(picked.claims).toMatchObject([{ key: '3', claimedBy: found.me, note: 'TC-1' }]);
+    expect(picked.result.rows.map((r: { key: string; claimedBy: unknown }) => [r.key, r.claimedBy !== null])).toEqual([['2', false], ['3', true]]);
+
+    const again = await call('POST', '/api/find/claim', { recipe: 'product-in-a-price-range', params: { min_price: '20' }, key: '3' });
+    expect(again.data.error.message).toMatch(/^products 3 is already claimed by you \(claim #\d+\)\.$/);
+    const first = (await call('POST', '/api/find/claim', { recipe: 'product-in-a-price-range', params: { min_price: '20' } })).data;
+    expect(first.claims[0].key).toBe('2');
+
+    const claims = (await call('GET', '/api/claims')).data.claims;
+    expect(claims.map((c: { key: string }) => c.key).sort()).toEqual(['2', '3']);
+    expect((await call('POST', `/api/claims/${claims[0].id}/extend`, { duration: '1d' })).data.claim.id).toBe(claims[0].id);
+    expect((await call('POST', `/api/claims/${claims[0].id}/release`)).data.released).toHaveLength(1);
+    expect((await call('POST', '/api/claims/release-mine')).data.released).toBe(1);
+    expect((await call('GET', '/api/claims')).data.claims).toEqual([]);
+  });
+
+  it('checks every recipe', async () => {
+    const { results } = (await call('POST', '/api/recipes/check')).data;
+    expect(results).toHaveLength(6);
+    expect(results.filter((r: { status: string }) => r.status === 'error')).toEqual([]);
+  });
+
+  it('rejects bad input clearly', async () => {
+    expect((await call('POST', '/api/find', { recipe: 'nope' })).data.error.message).toMatch(/^There is no recipe "nope"/);
+    expect((await call('POST', '/api/find', { recipe: 'product-low-on-stock', params: { max_stock: 'lots' } })).data.error.message).toBe(':max_stock must be a whole number, not "lots".');
+    expect((await call('POST', '/api/find', { recipe: 'product-low-on-stock', params: ['x'] })).data.error.message).toBe('"params" must be an object.');
+    expect((await call('POST', '/api/find/claim', { recipe: 'product-low-on-stock', duration: 'forever' })).data.error.message).toBe('"forever" is not a duration.');
+  });
+});
+
 describe('settings file', () => {
   it('reports a broken file instead of treating it as empty (and losing connections)', async () => {
     await writeFile(process.env.PROPMASTER_UI_CONFIG!, '{ "profiles": [ broken');

@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -90,7 +90,7 @@ describe('propmaster CLI', () => {
     expect(rows.every((r) => r.pass)).toBe(true);
 
     expect((await cli(['uninstall'])).out).toContain('Cancelled. Nothing was removed.'); // no TTY, no --yes
-    expect((await cli(['uninstall', '--yes'])).out).toContain(' ✔ Recorder removed');
+    expect((await cli(['uninstall', '--yes'])).out).toContain(' ✔ Propmaster removed');
   }, 60_000); // about 17 CLI runs of ~1.5 s each
 
   it('records in snapshot mode as a read-only user', async () => {
@@ -170,6 +170,62 @@ describe('propmaster CLI', () => {
     expect((await cli(['record', 'show', 'abc'])).err).toContain('"abc" is not a session id.');
     expect((await cli(['record', 'show', '--since', 'soon'])).err).toContain("Can't read the time \"soon\"");
     expect((await cli(['record', 'export', '--format', 'pdf'])).err).toMatch(/Allowed choices are html, md, sql/);
+  });
+
+  it('finds and claims test data, for people and for scripts', async () => {
+    await resetDatabase(db);
+    const recipes = ['--recipes', 'demo/recipes'];
+    const list = await cli(['find', ...recipes], null); // listing recipes needs no database
+    expect(list.code).toBe(0);
+    expect(list.out).toContain('6 recipes in');
+    expect(list.out).toContain('customer-who-has-never-ordered');
+
+    const found = await cli(['find', ...recipes, 'never', 'ordered']);
+    expect(found.out).toContain('Customer who has never ordered');
+    expect(found.out).toMatch(/│ 1 +│ alice@example\.com +│ Alice Tester +│ free +│/);
+    expect(found.out).toContain('3 matches');
+
+    const json = await cli(['find', ...recipes, 'never ordered', '--claim', '--as', 'ana', '--note', 'TC-7', '--json']);
+    expect(json.code).toBe(0);
+    const data = JSON.parse(json.out) as { claims: { id: string; key: string; row: { email: string } }[]; rows: { id: number }[] };
+    expect(data.claims).toMatchObject([{ key: '1', row: { email: 'alice@example.com' } }]);
+    expect(data.rows.map((r) => r.id)).toEqual([2, 3]);
+
+    const taken = await cli(['find', ...recipes, 'never ordered', '--claim', '2', '--as', 'ben']);
+    expect(taken.out).toMatch(/│ 1 +│ alice@example\.com +│ Alice Tester +│ ana until [\d: -]+│/);
+    expect(taken.out).toContain('✔ Claimed customers 2');
+    expect(taken.out).toContain('✔ Claimed customers 3');
+    const none = await cli(['find', ...recipes, 'never ordered', '--claim', '--as', 'cy']);
+    expect(none.code).toBe(1);
+    expect(none.err).toContain('Nothing to claim: all 3 matching rows are claimed by others.');
+
+    const claims = await cli(['claims', '--as', 'ana']);
+    expect(claims.out).toMatch(/customers 1 +│ ana \(you\)/);
+    expect(claims.out).toContain('TC-7');
+    expect((await cli(['claims', 'release', '--mine', '--as', 'ben'])).out).toContain('✔ Released 2 claims held by ben');
+    expect((await cli(['claims', 'release', data.claims[0]!.id])).out).toContain(`✔ Released claim #${data.claims[0]!.id} · customers 1 · held by ana`);
+
+    expect((await cli(['find', ...recipes, 'customer'])).err).toContain('2 recipes match "customer"');
+    expect((await cli(['find', ...recipes, 'low stock', '-p', 'max_stock=many'])).err).toContain(':max_stock must be a whole number, not "many".');
+    expect((await cli(['find', '--recipes', 'nowhere', 'x'], null)).err).toContain("Can't find recipes at");
+  });
+
+  it('checks recipes for CI and fails the run when one is broken', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'propmaster-recipes-'));
+    try {
+      await writeFile(join(dir, 'ok.sql'), "-- recipe: Paid order\nSELECT id FROM orders WHERE status = 'PAID'\n-- recipe: Any customer\nSELECT id FROM customers");
+      const ok = await cli(['recipes', 'check', '--recipes', dir]);
+      expect(ok.code).toBe(0);
+      expect(ok.out).toContain('1 working · 1 found nothing · 0 broken');
+      expect((await cli(['recipes', 'check', '--recipes', dir, '--strict'])).code).toBe(1);
+
+      await writeFile(join(dir, 'broken.sql'), '-- recipe: Old table\nSELECT id FROM orderz');
+      const broken = await cli(['recipes', 'check', '--recipes', dir]);
+      expect(broken.code).toBe(1);
+      expect(broken.out).toContain('relation "orderz" does not exist.');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('prints its version', async () => {

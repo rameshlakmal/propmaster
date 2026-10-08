@@ -13,6 +13,8 @@ export interface Profile {
   url: string;
   /** Path of the rules file used on the Rules page. */
   rulesFile?: string;
+  /** Recipe folder (or .sql file) used on the Find page. */
+  recipesPath?: string;
 }
 
 export interface UiConfig {
@@ -52,7 +54,7 @@ export async function saveProfile(profile: Profile): Promise<UiConfig> {
   assertNotProduction(profile.url);
   const config = await readConfig();
   const existing = config.profiles.find((p) => p.name === name);
-  const saved: Profile = { name, url: profile.url.trim(), rulesFile: profile.rulesFile ?? existing?.rulesFile };
+  const saved: Profile = { name, url: profile.url.trim(), rulesFile: profile.rulesFile ?? existing?.rulesFile, recipesPath: profile.recipesPath ?? existing?.recipesPath };
   config.profiles = [...config.profiles.filter((p) => p.name !== name), saved];
   config.active = name;
   await writeConfig(config);
@@ -84,6 +86,15 @@ export async function setRulesFile(name: string, rulesFile: string): Promise<UiC
   return config;
 }
 
+export async function setRecipesPath(name: string, recipesPath: string): Promise<UiConfig> {
+  const config = await readConfig();
+  const profile = config.profiles.find((p) => p.name === name);
+  if (!profile) throw new UserError(`There is no connection called "${name}".`);
+  profile.recipesPath = recipesPath;
+  await writeConfig(config);
+  return config;
+}
+
 export async function activeProfile(): Promise<Profile> {
   const config = await readConfig();
   const profile = config.profiles.find((p) => p.name === config.active) ?? config.profiles[0];
@@ -98,7 +109,7 @@ export function publicProfile(profile: Profile): Profile & { display: string } {
     const u = new URL(profile.url);
     if (u.password) u.password = '****';
     display = `${u.hostname}:${u.port || '5432'}${u.pathname}`;
-    return { name: profile.name, url: u.toString(), rulesFile: profile.rulesFile, display };
+    return { name: profile.name, url: u.toString(), rulesFile: profile.rulesFile, recipesPath: profile.recipesPath, display };
   } catch {
     return { ...profile, display };
   }

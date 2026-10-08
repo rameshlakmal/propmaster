@@ -4,6 +4,8 @@
 
 Propmaster is a test-data toolkit for QA engineers, built on PostgreSQL. Tool 1, the **DB Change Recorder**, records every insert, update and delete your test causes, grouped by the test step that caused it. Then it checks the recording against your business rules, and turns it into a bug-ticket report or SQL checks you can re-run.
 
+Tool 2, the **[Test Data Finder](#find-test-data-tool-2)**, finds the data a test needs ("a customer who has never ordered") with shared SQL recipes, and lets you claim a row so nobody else on the test database uses it while you test.
+
 > "I clicked **Place Order** and the screen said 'Success'. But did it create the payment row? Did it reduce the stock? Did it change something else?"
 
 ![Propmaster demo](demo/gif/propmaster-demo.gif)
@@ -144,6 +146,9 @@ Not sure what your DB user is allowed to do? Run `propmaster doctor`.
 | `record rename <id> <step> <name>` | Renames a step, while recording or afterwards (typed and auto steps). |
 | `record delete <id>` / `prune --older-than "7 days"` | Housekeeping. |
 | `record exclude <table…>` / `include <table…>` | Stop or resume watching busy tables such as `sessions` or `audit_log`. |
+| `find [words]` | Lists recipes, or finds test data with one (`-p name=value`, `--claim`, `--json`). See [Find test data](#find-test-data-tool-2). |
+| `recipes check` | Checks every recipe still runs and finds rows, e.g. in CI after a migration. |
+| `claims` / `claims add`, `extend`, `release` | Who is using which rows, and giving them back. |
 
 **Filters** work with `show`, `stop` and `export`:
 `--table orders,order_*,billing.*` · `--except-table` · `--user` · `--app` · `--op insert,update` · `--since 15m` · `--until 10:30` · `--step 2,3`
@@ -226,6 +231,85 @@ $ propmaster record check demo/rules.sql
 
 **Masking.** Exports hide passwords, tokens, API keys, card numbers and e-mail addresses (`d***@example.com`) by default. `--no-mask` turns that off, and `--mask-columns phone,dob` adds your own. Masked columns are left out of SQL checks. The terminal shows real values unless you pass `--mask`.
 
+## Find test data (Tool 2)
+
+> "I need a customer who has never ordered. I spent 40 minutes writing joins, then found out a colleague was already using that account."
+
+The **Test Data Finder** keeps the queries your team writes to find test data as **recipes**: named, tagged SQL in `.sql` files kept in git next to your tests. Anyone can run a recipe, fill in its parameters, and **claim** a row so nobody else on the shared test database uses it while they test.
+
+```sql
+-- recipe: Customer with several orders
+-- A returning shopper with an order history.
+-- tags: customers, orders, returning
+-- param: min_orders int = 2 | At least this many orders
+-- claim: customers via customer_id
+SELECT c.id AS customer_id, c.email, count(o.id) AS orders
+  FROM customers c
+  JOIN orders o ON o.customer_id = c.id
+ GROUP BY c.id, c.email
+HAVING count(o.id) >= :min_orders
+ ORDER BY count(o.id) DESC;
+```
+
+```
+$ propmaster find "never ordered" --claim --note "TC-142 first purchase"
+  PROPMASTER   Customer who has never ordered
+ 3 matches · 1 claimed · 21 ms
+
+ ┌────┬───────────────────┬────────────────┬─────────────────────┐
+ │ id │ email             │ name           │ Claim               │
+ ├────┼───────────────────┼────────────────┼─────────────────────┤
+ │ 2  │ bob@example.com   │ Bob Checker    │ ✔ yours             │
+ │ 3  │ cara@example.com  │ Cara Bugfinder │ free                │
+ │ 1  │ alice@example.com │ Alice Tester   │ priya until 16:40   │
+ └────┴───────────────────┴────────────────┴─────────────────────┘
+
+ ✔ Claimed customers 2 · claim #7 · until 16:52
+   → when you are done: propmaster claims release 7
+```
+
+**Writing recipes.** A recipe file holds one or more recipes. Each starts with `-- recipe: <name>`, then header comments, then one `SELECT`:
+
+| Header line | Meaning |
+| --- | --- |
+| `-- any text` | The description, shown in lists and search. |
+| `-- tags: billing, negative` | Tags to search by. |
+| `-- param: <name> <type> [= <default>] [\| <description>]` | A parameter, used as `:name` in the query. Types: `text`, `int`, `bigint`, `numeric`, `boolean`, `date`, `timestamptz`, `interval`. No default means it's required. Quote a default that holds spaces or `\|`: `= 'two words'`. |
+| `-- claim: customers` | Rows can be claimed. The result must include the table's primary key column (here `id`)… |
+| `-- claim: customers via customer_id` | …or name the result column that holds it. |
+
+Parameters are sent to Postgres as **bind values** (`$1::int`), never pasted into the SQL, so a value like `' OR 1=1` stays a value. Every `:name` must be declared and every declared parameter used, which catches typos when the file is read.
+
+**Finding.** `propmaster find` lists the recipes. `propmaster find <words>` runs the one recipe whose id or name matches, or whose name, description and tags contain every word (`find billing negative`). Pass values with `-p min_orders=3` (repeatable). Recipes come from `--recipes <folder or file>`, `$PROPMASTER_RECIPES`, or `./recipes`, and folders are searched recursively.
+
+**Claiming.** `--claim` claims the first free row, and `--claim 3` claims three. A claim lasts `--for 2h` (the default), and you can add `--note`. Claims belong to a person, not to the shared DB user: `--as <name>`, `$PROPMASTER_USER`, or your computer's user name. Rows others hold are listed last, marked with who holds them, and never handed out. Claiming is atomic, so two testers asking at the same moment never get the same row, and claims expire by themselves, so a forgotten claim never blocks anyone for long.
+
+| Command | What it does |
+| --- | --- |
+| `claims` | Lists current claims (`--mine`, `--all` to include expired). |
+| `claims add <table> <key>` | Claims a row you picked yourself. |
+| `claims extend <id> --for 1h` | Keeps a claim for longer. |
+| `claims release <id…>` / `--mine` | Gives rows back. |
+| `claims clear-expired` | Deletes claims that have run out. |
+
+**For automated tests.** `--json` prints the result for scripts: the rows, the claims you got, and each claimed row's values. The exit code is 1 when there's no free row:
+
+```js
+// Playwright, Cypress or any test runner
+const out = execFileSync('propmaster', ['find', 'never ordered', '--claim', '--for', '30m', '--json']);
+const { claims: [claim] } = JSON.parse(out);
+await page.fill('#email', claim.row.email);
+// ...and afterwards: propmaster claims release <claim.id>
+```
+
+**Checking recipes in CI.** `propmaster recipes check` runs every recipe against the database (with its defaults, limited to one row) and reports each as working, finding nothing, or **broken**: a renamed column, a dropped table, or a missing claim key after a migration. Recipes with a required parameter are checked with `EXPLAIN` instead of running. The exit code is 1 if any recipe is broken, and with `--strict` also if one finds nothing. Run it after migrations so testers never trip over a stale recipe.
+
+**In the web app**, the **Find data** page lists and searches recipes, shows a form for their parameters, runs them, and claims a row with one click. It also lists everyone's claims with **2 more hours** and **Release** buttons, and checks all recipes at once.
+
+**Safety.** Recipes run in a **read-only transaction** with a time limit (`--timeout`, default 30 s), one statement each. A recipe can't change data, even by calling a function that writes. Finding needs only read access. Claims are stored in `_propmaster.claims`, created on the first claim; that needs the right to create a schema (or a DBA can run [sql/finder.sql](sql/finder.sql) once).
+
+[demo/recipes/shop.sql](demo/recipes/shop.sql) has six example recipes for the demo shop.
+
 ## How it works
 
 All of trigger mode is in [`sql/recorder.sql`](sql/recorder.sql).
@@ -262,7 +346,8 @@ Docker Desktop's network latency swings a lot, so the in-database numbers are th
 
 - Hosts and databases named like production (`prod`, `production` as a word: `app_prod`, `prod-db`) are refused.
 - Attaching triggers waits at most 5 seconds for table locks, then fails with a clear message instead of queueing behind a migration.
-- Everything lives in the `_propmaster` schema; `propmaster uninstall` removes it all.
+- Everything lives in the `_propmaster` schema; `propmaster uninstall` removes it all, recordings and claims included.
+- Rules and recipes run read-only, with a time limit.
 - Passwords stay in environment variables or `.env` (git-ignored), never in exported files.
 
 ## Development
@@ -279,7 +364,7 @@ The [test plan](docs/TEST_PLAN.md) covers the risks, test levels and exit criter
 
 ## Roadmap
 
-Tool 1 (this) → **Tool 2: Test Data Finder** (saved SQL recipes for "find me a customer with an expired card") → **Tool 3: Seeder & Cleaner** (scenario seeding, safe cleanup, and undo of a recorded session) → a local dashboard and a Chrome side panel that marks test steps as you click.
+Tool 1: DB Change Recorder ✔ → Tool 2: Test Data Finder ✔ → **Tool 3: Seeder & Cleaner** (scenario seeding, safe cleanup, and undo of a recorded session; it will also create the data when a recipe finds none) → a Chrome side panel that marks test steps as you click.
 
 ## License
 

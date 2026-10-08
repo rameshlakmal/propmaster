@@ -22,6 +22,10 @@ import { formatTimeline } from './recorder/timeline.js';
 import * as trigger from './recorder/trigger.js';
 import { formatDateTime } from './recorder/format.js';
 import type { Recording } from './recorder/types.js';
+import * as claims from './finder/claims.js';
+import { checkRecipes, claimFound, find } from './finder/find.js';
+import { loadRecipes, pickRecipe, resolveRecipesPath } from './finder/recipes.js';
+import { formatChecks, formatClaims, formatFindResult, formatRecipeList, until } from './finder/report.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -137,11 +141,11 @@ program
 
 program
   .command('uninstall')
-  .description('Remove the recorder, its triggers and all recordings stored in the database')
+  .description('Remove Propmaster from the database: the recorder, its triggers, all recordings and claims')
   .option('-y, --yes', 'skip the confirmation prompt')
   .action(run(async ({ db }, opts: { yes?: boolean }) => {
-    if (!(await trigger.isInstalled(db))) {
-      say(` ${i.idle} The recorder is not installed. Nothing to remove.`);
+    if (!(await trigger.isInstalled(db)) && !(await claims.claimsExist(db))) {
+      say(` ${i.idle} Propmaster is not installed. Nothing to remove.`);
       return;
     }
     if (!opts.yes && !(await confirm('uninstall'))) {
@@ -149,7 +153,7 @@ program
       return;
     }
     await trigger.uninstall(db);
-    say(` ${i.ok} Recorder removed ${c.dim('· the _propmaster schema and all its triggers are gone')}`);
+    say(` ${i.ok} Propmaster removed ${c.dim('· the _propmaster schema, its triggers, recordings and claims are gone')}`);
   }));
 
 program
@@ -414,6 +418,170 @@ record
   .action(run(async ({ db }, tables: string[]) => {
     for (const t of tables) await trigger.includeTable(db, t);
     say(` ${i.ok} Watching again ${c.bold(tables.join(', '))}`);
+  }));
+
+// ---------- find (Test Data Finder) ----------
+
+const recipesOption = () => new Option('--recipes <path>', 'recipe folder or .sql file (default: $PROPMASTER_RECIPES, or ./recipes)');
+
+function param(value: string, previous: Record<string, string> = {}): Record<string, string> {
+  const eq = value.indexOf('=');
+  if (eq < 1) throw new UserError(`"${value}" is not a parameter.`, 'Write it as name=value, e.g. -p min_orders=3');
+  return { ...previous, [value.slice(0, eq).trim()]: value.slice(eq + 1) };
+}
+
+const claimCount = (v: boolean | string | undefined): number | undefined => {
+  if (v === undefined || v === false) return undefined;
+  if (v === true) return 1;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new UserError(`--claim takes a number of rows, not "${v}".`);
+  return n;
+};
+
+const claimer = (as?: string) => as?.trim() || claims.defaultClaimer();
+
+async function listRecipes(path?: string): Promise<void> {
+  const where = resolveRecipesPath(path);
+  console.log(formatRecipeList(await loadRecipes(where), where));
+}
+
+interface FindOpts {
+  recipes?: string;
+  param: Record<string, string>;
+  limit: number;
+  claim?: boolean | string;
+  for: string;
+  as?: string;
+  note?: string;
+  timeout: string;
+  json?: boolean;
+}
+
+program
+  .command('find')
+  .argument('[recipe...]', 'a recipe id, its name, or words from it (none: list all recipes)')
+  .description('Find test data with a recipe, and claim a row so nobody else uses it (exit code 1 if no free row)')
+  .addOption(recipesOption())
+  .option('-p, --param <name=value>', 'a parameter value (repeatable)', param, {})
+  .addOption(new Option('--limit <n>', 'rows to show').default(10).argParser(Number))
+  .option('--claim [count]', 'claim the first free row (or this many) for your test')
+  .option('--for <duration>', 'how long a claim lasts: 30m, 2h, 1d', '2h')
+  .option('--as <name>', 'who is claiming (default: $PROPMASTER_USER, or your OS user name)')
+  .option('--note <text>', 'a note on the claim, e.g. the test it is for')
+  .option('--timeout <interval>', 'time limit for the query', '30s')
+  .option('--json', 'print the result as JSON, for scripts and automated tests')
+  .action(async (words: string[], opts: FindOpts) => {
+    if (words.length === 0) {
+      await listRecipes(opts.recipes);
+      return;
+    }
+    const recipe = pickRecipe(await loadRecipes(resolveRecipesPath(opts.recipes)), words.join(' '));
+    const count = claimCount(opts.claim);
+    const seconds = claims.parseDuration(opts.for);
+    await run(async ({ db }) => {
+      const result = await find(db, recipe, { params: opts.param, limit: Math.max(opts.limit, count ?? 0), timeout: opts.timeout });
+      const got = count ? await claimFound(db, result, { count, by: claimer(opts.as), note: opts.note, seconds }) : [];
+      if (opts.json) {
+        const taken = new Set(got.map((g) => g.key));
+        console.log(JSON.stringify({
+          recipe: result.recipe,
+          params: result.params,
+          matches: result.matches,
+          claimedByOthers: result.claimed,
+          claims: got.map((g) => ({ id: g.id, table: g.table, key: g.key, expiresAt: g.expiresAt, row: result.rows.find((r) => r.key === g.key)?.values ?? null })),
+          rows: result.rows.filter((r) => !r.claimedBy && !(r.key !== null && taken.has(r.key))).map((r) => r.values),
+        }, null, 2));
+      } else {
+        console.log(formatFindResult(result, got, { me: claimer(opts.as) }));
+      }
+      if (!got.length && !result.rows.some((r) => !r.claimedBy)) process.exitCode = 1;
+    })();
+  });
+
+const recipes = program.command('recipes').description('List and check test data recipes');
+
+recipes
+  .command('list', { isDefault: true })
+  .description('List the recipes (the same as `propmaster find` without a recipe)')
+  .addOption(recipesOption())
+  .action((opts: { recipes?: string }) => listRecipes(opts.recipes));
+
+recipes
+  .command('check')
+  .description('Check every recipe still runs and finds rows, e.g. in CI after a migration (exit code 1 if one is broken)')
+  .addOption(recipesOption())
+  .option('--strict', 'also fail when a recipe finds no rows')
+  .option('--timeout <interval>', 'time limit per recipe', '30s')
+  .action(async (opts: { recipes?: string; strict?: boolean; timeout: string }) => {
+    const where = resolveRecipesPath(opts.recipes);
+    const all = await loadRecipes(where);
+    await run(async ({ db }) => {
+      say(` ${brand(c)}  ${c.bold('Recipe check')}`, ` ${c.dim(`${all.length} recipe${all.length === 1 ? '' : 's'} from ${where}`)}`, '');
+      const results = await checkRecipes(db, all, { timeout: opts.timeout });
+      console.log(formatChecks(results, { strict: opts.strict }));
+      if (results.some((r) => r.status === 'error' || (opts.strict && r.status === 'empty'))) process.exitCode = 1;
+    })();
+  });
+
+const claimsCmd = program.command('claims').description('See, add, extend and release claims on test data');
+
+claimsCmd
+  .command('list', { isDefault: true })
+  .description('List current claims')
+  .option('--all', 'include expired claims')
+  .option('--mine', 'only your claims')
+  .option('--as <name>', 'who "you" are (default: $PROPMASTER_USER, or your OS user name)')
+  .action(run(async ({ db }, opts: { all?: boolean; mine?: boolean; as?: string }) => {
+    const me = claimer(opts.as);
+    console.log(formatClaims(await claims.list(db, { includeExpired: opts.all, by: opts.mine ? me : undefined }), me));
+  }));
+
+claimsCmd
+  .command('add')
+  .argument('<table>', 'the table, e.g. customers or billing.invoices')
+  .argument('<key>', 'the primary key value of the row, e.g. 318')
+  .description('Claim a row you picked yourself')
+  .option('--for <duration>', 'how long the claim lasts: 30m, 2h, 1d', '2h')
+  .option('--as <name>', 'who is claiming (default: $PROPMASTER_USER, or your OS user name)')
+  .option('--note <text>', 'a note, e.g. the test it is for')
+  .action(run(async ({ db }, table: string, key: string, opts: { for: string; as?: string; note?: string }) => {
+    const got = await claims.claimByKey(db, table, key, { by: claimer(opts.as), note: opts.note, seconds: claims.parseDuration(opts.for) });
+    say(` ${i.ok} Claimed ${c.bold(`${table} ${key}`)} ${c.dim(`· claim #${got.id} · until ${until(got.expiresAt)}`)}`, hint(c, `when you are done: propmaster claims release ${got.id}`));
+  }));
+
+claimsCmd
+  .command('release')
+  .argument('[claims...]', 'claim ids, e.g. 12 15')
+  .description('Release claims so others can use the rows')
+  .option('--mine', 'release all of your claims')
+  .option('--as <name>', 'who "you" are (default: $PROPMASTER_USER, or your OS user name)')
+  .action(run(async ({ db }, ids: string[], opts: { mine?: boolean; as?: string }) => {
+    if (opts.mine) {
+      const me = claimer(opts.as);
+      const n = await claims.releaseAllBy(db, me);
+      say(` ${i.ok} Released ${n} claim${n === 1 ? '' : 's'} ${c.dim(`held by ${me}`)}`);
+      return;
+    }
+    if (ids.length === 0) throw new UserError('Which claims?', 'Give claim ids (see `propmaster claims`), or --mine for all of yours.');
+    for (const r of await claims.release(db, ids)) say(` ${i.ok} Released claim #${r.id} ${c.dim(`· ${r.table.replace(/^public\./, '')} ${r.key} · held by ${r.claimedBy}`)}`);
+  }));
+
+claimsCmd
+  .command('extend')
+  .argument('<claim>', 'claim id')
+  .description('Keep a claim for longer')
+  .option('--for <duration>', 'how long from now: 30m, 2h, 1d', '2h')
+  .action(run(async ({ db }, id: string, opts: { for: string }) => {
+    const r = await claims.extend(db, id, claims.parseDuration(opts.for));
+    say(` ${i.ok} Claim #${r.id} ${c.dim(`· ${r.table.replace(/^public\./, '')} ${r.key}`)} now lasts until ${c.bold(until(r.expiresAt))}`);
+  }));
+
+claimsCmd
+  .command('clear-expired')
+  .description('Delete claims that have run out')
+  .action(run(async ({ db }) => {
+    const n = await claims.clearExpired(db);
+    say(` ${i.ok} Deleted ${n} expired claim${n === 1 ? '' : 's'}`);
   }));
 
 program

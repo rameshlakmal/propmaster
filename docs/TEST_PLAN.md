@@ -1,4 +1,4 @@
-# Test plan: DB Change Recorder (v0.1)
+# Test plan: DB Change Recorder (v0.1) and Test Data Finder (v0.2)
 
 ## 1. What is tested, and why
 
@@ -9,7 +9,13 @@ The recorder runs inside someone else's database, next to the application under 
 
 So most tests target those two risks. Features such as filters and exports come next.
 
-**In scope:** trigger mode, snapshot mode, the CLI, filters, masking, the HTML, Markdown and SQL exports, business rule checks, `doctor`, install, upgrade and uninstall.
+The Test Data Finder runs testers' own SQL on a shared database and hands out rows to people. Its worst failures are:
+
+3. **A recipe changes data or hangs the database.**
+4. **Two testers get the same row**, which is the very problem claiming exists to solve.
+5. **A recipe silently returns the wrong rows**: a parameter pasted wrongly, or a recipe broken by a migration that nobody notices.
+
+**In scope:** trigger mode, snapshot mode, the CLI, filters, masking, the HTML, Markdown and SQL exports, business rule checks, `doctor`, install, upgrade and uninstall. For the Finder: recipe files, parameters, finding, claims, `recipes check`, `--json`, and the Find data page.
 **Out of scope for v0.1:** MySQL and other databases, the web dashboard and the Chrome side panel (later phases), and concurrent recording sessions (one session per database is a design limit).
 
 ## 2. Risks and how each one is covered
@@ -37,13 +43,19 @@ So most tests target those two risks. Features such as filters and exports come 
 | R19 | The web app shows something different from what was recorded | Low · High | Values are formatted on the server with the same code as the CLI (exact numbers) | `records steps, shows them live, and stops` (exact `84.50`); browser walkthrough |
 | R20 | Pausing loses or leaks changes: setup done while paused shows in the test, or changes before the pause disappear | Med · High | Trigger mode skips capture while the state row says paused; snapshot mode compares at the pause and takes a fresh baseline on resume; a new session always starts unpaused | `test/pause.integration.test.ts`: both modes, steps while paused, stopping while paused, errors for pausing twice; CLI e2e; browser walkthrough |
 | R21 | Auto steps split or name an action wrongly, or differently each time a recording is read | Med · Med | Steps are worked out by a pure function from the stored changes and the gap saved with the session; typed names always win for the next action | `test/autosteps.test.ts` (splitting, naming, markers); `test/autosteps.integration.test.ts` (live, after stop, re-read, typed name, snapshot refused); browser walkthrough |
+| R22 | A recipe changes data or hangs a shared database | Low · **High** | Recipes run in a `READ ONLY` transaction with `statement_timeout`, always rolled back; one statement (extended protocol) | `refuses recipes that change data` (a writing function, `nextval`, a second statement; the row count is unchanged afterwards), `stops a slow recipe at the time limit` |
+| R23 | Two testers get the same row | Med · **High** | One `INSERT … ON CONFLICT DO UPDATE … WHERE expired` per row: a held row is skipped, the next free one is tried | `never gives the same row to two testers claiming at the same moment` (four connections at once), `claims the first free row, and others then get the next one` |
+| R24 | A parameter changes the meaning of the query (SQL injection, or a mistyped value) | Low · High | Parameters are bind values with a declared type (`$1::int`); placeholders inside strings, comments, quoted names, dollar quotes and `::` casts are left alone; values are checked before they reach Postgres | Placeholder scanner unit tests; `uses parameters as bind values` (a value like `' OR '1'='1` matches nothing); mistyped-value tests |
+| R25 | A recipe breaks after a migration and nobody notices | High · Med | `recipes check` runs every recipe (or `EXPLAIN`s it when a value is required) and fails CI when one is broken | `checkRecipes` integration test (missing table, missing claim key, broken query with a required parameter), CLI exit-code test |
+| R26 | A forgotten claim blocks a row for good, or claims make the recorder look installed | Med · Med | Claims expire and are taken over after; the recorder checks for its own tables, not the schema | `lets an expired claim be taken over`, `keeps claims and the recorder apart` |
+| R27 | A tester without write access can't use the Finder | High · Med | Finding needs only SELECT; claiming says which grant is missing | `works for a user who may only read` |
 
 ## 3. Test levels
 
 | Level | Where | What | Runs on |
 |---|---|---|---|
-| Unit | `test/*.test.ts` (not `integration`/`e2e`) | Formatting, filters, time parsing, masking, exports, rule parsing and scoping, snapshot diff, production guard | Any machine, no database |
-| Integration | `test/*.integration.test.ts` | Trigger mode, snapshot mode, doctor, SQL checks and rule checks against **real PostgreSQL** | Docker locally; GitHub Actions service container in CI |
+| Unit | `test/*.test.ts` (not `integration`/`e2e`) | Formatting, filters, time parsing, masking, exports, rule parsing and scoping, snapshot diff, production guard, recipe parsing, placeholders, search, durations | Any machine, no database |
+| Integration | `test/*.integration.test.ts` | Trigger mode, snapshot mode, doctor, SQL checks, rule checks, finding, claims and recipe checks against **real PostgreSQL** | Docker locally; GitHub Actions service container in CI |
 | End to end | `test/cli.e2e.test.ts` | The CLI as a separate process: full flows, exit codes, error messages | Same as integration |
 | Web app | `test/ui-server.integration.test.ts` | The web app's API: security, connections, a full recording, exports, rules | Same as integration |
 | Web app, in a browser | Manual walkthrough before a release (section 6) | Start, steps, live timeline, pause, flag, the floating window, stop, sessions, search, rules, setup, light/dark, phone width, console errors | Headless Edge or Chrome |
@@ -95,6 +107,13 @@ Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
 - ⬜ Auto steps against a real app (EverShop): busy tables such as `event` should be excluded, or they keep a step from going quiet.
 - ⬜ Floating window in a real (not headless) Chrome: it stays on top of another application's window.
 
+Test Data Finder (v0.2):
+
+- ✅ CLI on Windows against the demo shop: list recipes, find, claim one and two rows as different testers, claimed rows listed last with who holds them, `claims`, `extend`, `release`, `release --mine`, `claims add` for a missing row and an already-claimed row, `--json`, `recipes check`.
+- ✅ Web app API against the demo shop: open a recipe folder pasted with quotes, find with an empty parameter (default used), claim a picked row, claim it again (refused, naming who holds it), extend, check all, release mine.
+- ⬜ Find data page in a browser: search and tags, parameter form (number and date fields), Find, Claim on a row, Find and claim one, claims list with 2 more hours and Release, Check all recipes, light and dark mode, phone width, no console errors.
+- ⬜ Recipes for a real app (EverShop or Halden), used by two people at once.
+
 ## 7. Known limitations (by design in v0.1)
 
 - One recording session per database at a time; filters separate other users' changes.
@@ -103,6 +122,9 @@ Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
 - Snapshot mode stores full table copies under `.propmaster/` while recording; they are deleted at stop.
 - With a statement on an inheritance parent, child-only columns are not in the recorded row (Postgres converts rows to the parent's type).
 - SQL checks verify the final state of each touched row, not the order changes happened in.
+- Only tables with a one-column primary key can be claimed.
+- A claim marks a row; it doesn't lock it. The app, and testers who don't use Propmaster, can still change a claimed row.
+- When nothing matches, the Finder says so; creating the missing data is Tool 3's job (Seeder).
 
 ## 8. How to run
 

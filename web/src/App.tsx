@@ -1,10 +1,11 @@
 import { Box, Button, Callout, Code, Flex, Select, Text } from '@radix-ui/themes';
-import { ArrowClockwise, Database, ListChecks, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
+import { ArrowClockwise, Database, ListChecks, MagnifyingGlass, PlugsConnected, Record, Rows } from '@phosphor-icons/react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, STALE_SERVER_EVENT } from './api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { floatingSupported, useFloatingWindow } from './floating';
 import { useLoad, useRoute, useSystemAppearance } from './hooks';
+import { FindPage } from './pages/FindPage';
 import { RecordPage } from './pages/RecordPage';
 import { RulesPage } from './pages/RulesPage';
 import { SessionsPage } from './pages/SessionsPage';
@@ -70,6 +71,7 @@ export function App() {
       ? <SetupPage config={config.data} status={status.data} onChanged={onProfilesChanged} />
       : route.page === 'sessions' ? <SessionsPage selectedId={route.id} activeProfile={config.data.active} />
       : route.page === 'rules' ? <RulesPage activeProfile={config.data.active} />
+      : route.page === 'find' ? <FindPage activeProfile={config.data.active} />
       : <RecordPage status={status.data} statusError={status.error} onChange={status.refresh} stopped={stopped} onStopped={setStopped}
           floating={{ supported: floatingSupported, isOpen: floating.isOpen, open: floating.open, close: floating.close }} />;
 
@@ -107,6 +109,7 @@ export function App() {
           </NavItem>
           <NavItem to="sessions" current={route.page === 'sessions'} icon={<Rows size={18} />}>Sessions</NavItem>
           <NavItem to="rules" current={route.page === 'rules'} icon={<ListChecks size={18} />}>Rules</NavItem>
+          <NavItem to="find" current={route.page === 'find'} icon={<MagnifyingGlass size={18} />}>Find data</NavItem>
           <NavItem to="setup" current={route.page === 'setup' || !hasProfile} icon={<PlugsConnected size={18} />}>Setup</NavItem>
         </nav>
 

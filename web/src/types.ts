@@ -10,6 +10,7 @@ export interface Profile {
   url: string;
   display: string;
   rulesFile?: string;
+  recipesPath?: string;
 }
 
 export interface Config {
@@ -133,4 +134,69 @@ export interface RulesFile {
   content: string;
   rules: { name: string; line: number }[];
   error: string | null;
+}
+
+// ---------- Test Data Finder ----------
+
+export interface RecipeParam {
+  name: string;
+  type: 'text' | 'int' | 'bigint' | 'numeric' | 'boolean' | 'date' | 'timestamptz' | 'interval';
+  default?: string;
+  description?: string;
+}
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  params: RecipeParam[];
+  claim?: { table: string; via?: string };
+  sql: string;
+  file: string;
+  line: number;
+}
+
+export interface RecipesSource {
+  path: string;
+  recipes: Recipe[];
+  error: string | null;
+}
+
+export interface ClaimRow {
+  id: string;
+  table: string;
+  key: string;
+  claimedBy: string;
+  recipe: string | null;
+  note: string | null;
+  claimedAt: string;
+  expiresAt: string;
+  expired: boolean;
+}
+
+export interface FoundRow {
+  values: Record<string, unknown>;
+  key: string | null;
+  claimedBy: ClaimRow | null;
+}
+
+export interface FindResult {
+  recipe: { id: string; name: string; file: string; line: number };
+  params: Record<string, string>;
+  columns: string[];
+  rows: FoundRow[];
+  matches: number;
+  claimed: number;
+  claim: { table: string; keyColumn: string; column: string } | null;
+  ms: number;
+}
+
+export interface RecipeCheck {
+  recipe: { id: string; name: string; file: string; line: number };
+  status: 'ok' | 'empty' | 'error';
+  how: 'run' | 'explain';
+  matches: number | null;
+  ms: number;
+  error?: string;
 }

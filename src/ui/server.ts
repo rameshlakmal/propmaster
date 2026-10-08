@@ -17,6 +17,9 @@ import { toSql } from '../recorder/export/sql.js';
 import { createMasker, maskRecording } from '../recorder/mask.js';
 import { checkRules, parseRules } from '../recorder/rules.js';
 import * as sessions from '../recorder/sessions.js';
+import * as claims from '../finder/claims.js';
+import { checkRecipes, claimFound, find } from '../finder/find.js';
+import { loadRecipes, type Recipe } from '../finder/recipes.js';
 import * as trigger from '../recorder/trigger.js';
 import * as profiles from './profiles.js';
 import { toView } from './view.js';
@@ -59,6 +62,32 @@ const str = (v: unknown, field: string): string => {
   if (typeof v !== 'string' || !v.trim()) throw new UserError(`"${field}" is required.`);
   return v.trim();
 };
+
+/** Windows' "Copy as path" wraps the path in quotes: accept it as pasted. */
+const pastedPath = (v: unknown, field: string): string => resolve(str(v, field).replace(/^(["'])(.*)\1$/, '$2').trim());
+
+/** Parameter values from the browser: an object of strings. Empty fields mean "use the default". */
+function paramValues(v: unknown): Record<string, string> {
+  if (v === undefined || v === null) return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new UserError('"params" must be an object.');
+  const out: Record<string, string> = {};
+  for (const [k, value] of Object.entries(v)) {
+    if (typeof value !== 'string') throw new UserError(`Parameter "${k}" must be text.`);
+    if (value.trim() !== '') out[k] = value;
+  }
+  return out;
+}
+
+/** The active profile's recipes, and the one with this id. */
+async function profileRecipe(profile: profiles.Profile, id: unknown): Promise<Recipe> {
+  if (!profile.recipesPath) throw new UserError('Choose a recipe folder first.');
+  const recipe = (await loadRecipes(profile.recipesPath)).find((r) => r.id === id);
+  if (!recipe) throw new UserError(`There is no recipe "${String(id)}" in ${profile.recipesPath}.`, 'It may have been renamed: reload the list.');
+  return recipe;
+}
+
+const durationOf = (v: unknown): number => claims.parseDuration(typeof v === 'string' && v.trim() ? v : '2h');
+const limitOf = (v: unknown): number => (typeof v === 'number' ? v : 25);
 
 // ---------- API ----------
 
@@ -146,8 +175,7 @@ const routes: [string, RegExp, Handler][] = [
   })],
   ['PUT', /^\/api\/rules$/, async (req) => {
     const { path, content } = await req.body();
-    // Windows' "Copy as path" wraps the path in quotes: accept it as pasted.
-    const file = resolve(str(path, 'path').trim().replace(/^(["'])(.*)\1$/, '$2').trim());
+    const file = pastedPath(path, 'path');
     if (extname(file).toLowerCase() !== '.sql') throw new UserError(`Rules files must end in .sql, and this one doesn't: ${file}`);
     if (typeof content === 'string') {
       parseRules(content, file); // refuse to save a file the checker can't read
@@ -159,6 +187,74 @@ const routes: [string, RegExp, Handler][] = [
     await profiles.setRulesFile(profile.name, file);
     return { ok: true, path: file };
   }],
+  // ---------- Test Data Finder ----------
+
+  ['GET', /^\/api\/recipes$/, async () => {
+    const profile = await profiles.activeProfile();
+    const path = profile.recipesPath ?? '';
+    if (!path) return { path, recipes: [], error: null };
+    try {
+      return { path, recipes: await loadRecipes(path), error: null };
+    } catch (err) {
+      return { path, recipes: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }],
+  ['PUT', /^\/api\/recipes$/, async (req) => {
+    const { path } = await req.body();
+    const target = pastedPath(path, 'path');
+    if (!existsSync(target)) throw new UserError(`Can't find ${target}.`, 'Give a folder of .sql recipe files, or one .sql file.');
+    const profile = await profiles.activeProfile();
+    await profiles.setRecipesPath(profile.name, target);
+    return { ok: true, path: target };
+  }],
+  ['POST', /^\/api\/recipes\/check$/, () => withActive(async (db, _identity, profile) => {
+    if (!profile.recipesPath) throw new UserError('Choose a recipe folder first.');
+    return { results: await checkRecipes(db, await loadRecipes(profile.recipesPath)) };
+  })],
+  ['POST', /^\/api\/find$/, async (req) => {
+    const { recipe, params, limit } = await req.body();
+    return withActive(async (db, _identity, profile) => ({
+      me: claims.defaultClaimer(),
+      result: await find(db, await profileRecipe(profile, recipe), { params: paramValues(params), limit: limitOf(limit) }),
+    }));
+  }],
+  // Claims one row the tester picked (key), or the first free one. The recipe runs again first, so the
+  // row is checked against the current data and claims.
+  ['POST', /^\/api\/find\/claim$/, async (req) => {
+    const { recipe, params, limit, key, duration, note } = await req.body();
+    if (key !== undefined && typeof key !== 'string') throw new UserError('"key" must be text.');
+    if (note !== undefined && typeof note !== 'string') throw new UserError('"note" must be text.');
+    return withActive(async (db, _identity, profile) => {
+      const r = await profileRecipe(profile, recipe);
+      const options = { params: paramValues(params), limit: limitOf(limit) };
+      const before = await find(db, r, options);
+      const opts = { by: claims.defaultClaimer(), note: note?.trim() || undefined, seconds: durationOf(duration) };
+      let got: claims.ClaimRow[];
+      if (key === undefined) {
+        got = await claimFound(db, before, opts);
+      } else {
+        const row = before.rows.find((x) => x.key === key);
+        if (!row) throw new UserError('That row no longer matches the recipe.', 'Run it again to see the current rows.');
+        if (row.claimedBy) {
+          const who = row.claimedBy.claimedBy === opts.by ? 'you' : row.claimedBy.claimedBy;
+          throw new UserError(`${before.claim!.table.replace(/^public\./, '')} ${key} is already claimed by ${who} (claim #${row.claimedBy.id}).`);
+        }
+        got = await claimFound(db, { ...before, rows: [row] }, opts);
+      }
+      return { me: opts.by, claims: got, result: await find(db, r, options) };
+    });
+  }],
+  ['GET', /^\/api\/claims$/, (req) => withActive(async (db) => ({
+    me: claims.defaultClaimer(),
+    claims: await claims.list(db, { includeExpired: req.query.get('all') === '1' }),
+  }))],
+  ['POST', /^\/api\/claims\/(\d+)\/release$/, (req) => withActive(async (db) => ({ released: await claims.release(db, [req.params[0]!]) }))],
+  ['POST', /^\/api\/claims\/(\d+)\/extend$/, async (req) => {
+    const { duration } = await req.body();
+    return withActive(async (db) => ({ claim: await claims.extend(db, req.params[0]!, durationOf(duration)) }));
+  }],
+  ['POST', /^\/api\/claims\/release-mine$/, () => withActive(async (db) => ({ released: await claims.releaseAllBy(db, claims.defaultClaimer()) }))],
+
   ['POST', /^\/api\/rules\/check$/, async (req) => {
     const { sessionId, allRows } = await req.body();
     return withActive(async (db, identity, profile) => {
