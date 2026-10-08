@@ -86,6 +86,11 @@ async function profileRecipe(profile: profiles.Profile, id: unknown): Promise<Re
   return recipe;
 }
 
+/** Who claims in the web app: the name saved on the Find page, else $PROPMASTER_USER or the OS user name. */
+async function me(): Promise<string> {
+  return (await profiles.readConfig()).claimAs ?? claims.defaultClaimer();
+}
+
 const durationOf = (v: unknown): number => claims.parseDuration(typeof v === 'string' && v.trim() ? v : '2h');
 const limitOf = (v: unknown): number => (typeof v === 'number' ? v : 25);
 
@@ -214,7 +219,7 @@ const routes: [string, RegExp, Handler][] = [
   ['POST', /^\/api\/find$/, async (req) => {
     const { recipe, params, limit } = await req.body();
     return withActive(async (db, _identity, profile) => ({
-      me: claims.defaultClaimer(),
+      me: await me(),
       result: await find(db, await profileRecipe(profile, recipe), { params: paramValues(params), limit: limitOf(limit) }),
     }));
   }],
@@ -228,7 +233,7 @@ const routes: [string, RegExp, Handler][] = [
       const r = await profileRecipe(profile, recipe);
       const options = { params: paramValues(params), limit: limitOf(limit) };
       const before = await find(db, r, options);
-      const opts = { by: claims.defaultClaimer(), note: note?.trim() || undefined, seconds: durationOf(duration) };
+      const opts = { by: await me(), note: note?.trim() || undefined, seconds: durationOf(duration) };
       let got: claims.ClaimRow[];
       if (key === undefined) {
         got = await claimFound(db, before, opts);
@@ -244,16 +249,33 @@ const routes: [string, RegExp, Handler][] = [
       return { me: opts.by, claims: got, result: await find(db, r, options) };
     });
   }],
+  // The name claims are made under. An empty name goes back to the default.
+  ['GET', /^\/api\/claimer$/, async () => ({ me: await me(), saved: (await profiles.readConfig()).claimAs ?? null, fallback: claims.defaultClaimer() })],
+  ['PUT', /^\/api\/claimer$/, async (req) => {
+    const { name } = await req.body();
+    if (typeof name !== 'string') throw new UserError('"name" must be text.');
+    await profiles.setClaimAs(name);
+    return { me: await me() };
+  }],
   ['GET', /^\/api\/claims$/, (req) => withActive(async (db) => ({
-    me: claims.defaultClaimer(),
+    me: await me(),
     claims: await claims.list(db, { includeExpired: req.query.get('all') === '1' }),
   }))],
-  ['POST', /^\/api\/claims\/(\d+)\/release$/, (req) => withActive(async (db) => ({ released: await claims.release(db, [req.params[0]!]) }))],
-  ['POST', /^\/api\/claims\/(\d+)\/extend$/, async (req) => {
-    const { duration } = await req.body();
-    return withActive(async (db) => ({ claim: await claims.extend(db, req.params[0]!, durationOf(duration)) }));
+  // Another tester's live claim is only released or extended with force: true (the page asks first).
+  ['POST', /^\/api\/claims\/(\d+)\/release$/, async (req) => {
+    const { force } = await req.body();
+    const owner = { by: await me(), force: force === true };
+    return withActive(async (db) => ({ released: await claims.release(db, [req.params[0]!], owner) }));
   }],
-  ['POST', /^\/api\/claims\/release-mine$/, () => withActive(async (db) => ({ released: await claims.releaseAllBy(db, claims.defaultClaimer()) }))],
+  ['POST', /^\/api\/claims\/(\d+)\/extend$/, async (req) => {
+    const { duration, force } = await req.body();
+    const owner = { by: await me(), force: force === true };
+    return withActive(async (db) => ({ claim: await claims.extend(db, req.params[0]!, durationOf(duration), owner) }));
+  }],
+  ['POST', /^\/api\/claims\/release-mine$/, async () => {
+    const by = await me();
+    return withActive(async (db) => ({ released: await claims.releaseAllBy(db, by) }));
+  }],
 
   ['POST', /^\/api\/rules\/check$/, async (req) => {
     const { sessionId, allRows } = await req.body();

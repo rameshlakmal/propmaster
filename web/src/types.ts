@@ -187,6 +187,8 @@ export interface FindResult {
   columns: string[];
   rows: FoundRow[];
   matches: number;
+  /** More than `matches` rows match: counting stopped there. */
+  moreMatches: boolean;
   claimed: number;
   claim: { table: string; keyColumn: string; column: string } | null;
   ms: number;

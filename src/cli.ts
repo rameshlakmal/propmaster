@@ -475,28 +475,42 @@ program
       await listRecipes(opts.recipes);
       return;
     }
-    const recipe = pickRecipe(await loadRecipes(resolveRecipesPath(opts.recipes)), words.join(' '));
-    const count = claimCount(opts.claim);
-    const seconds = claims.parseDuration(opts.for);
-    await run(async ({ db }) => {
-      const result = await find(db, recipe, { params: opts.param, limit: Math.max(opts.limit, count ?? 0), timeout: opts.timeout });
-      const got = count ? await claimFound(db, result, { count, by: claimer(opts.as), note: opts.note, seconds }) : [];
-      if (opts.json) {
-        const taken = new Set(got.map((g) => g.key));
-        console.log(JSON.stringify({
-          recipe: result.recipe,
-          params: result.params,
-          matches: result.matches,
-          claimedByOthers: result.claimed,
-          claims: got.map((g) => ({ id: g.id, table: g.table, key: g.key, expiresAt: g.expiresAt, row: result.rows.find((r) => r.key === g.key)?.values ?? null })),
-          rows: result.rows.filter((r) => !r.claimedBy && !(r.key !== null && taken.has(r.key))).map((r) => r.values),
-        }, null, 2));
-      } else {
-        console.log(formatFindResult(result, got, { me: claimer(opts.as) }));
-      }
-      if (!got.length && !result.rows.some((r) => !r.claimedBy)) process.exitCode = 1;
-    })();
+    if (!opts.json) return findData(words, opts);
+    // Scripts read stdout as JSON, so errors come as JSON too: { "error": ..., "hint": ... }.
+    try {
+      await findData(words, opts);
+    } catch (err) {
+      const e = explainError(err);
+      console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), hint: e instanceof UserError ? e.hint ?? null : null }, null, 2));
+      process.exitCode = 1;
+    }
   });
+
+async function findData(words: string[], opts: FindOpts): Promise<void> {
+  const recipe = pickRecipe(await loadRecipes(resolveRecipesPath(opts.recipes)), words.join(' '));
+  const count = claimCount(opts.claim);
+  const seconds = claims.parseDuration(opts.for);
+  await run(async ({ db }) => {
+    const result = await find(db, recipe, { params: opts.param, limit: Math.max(opts.limit, count ?? 0), timeout: opts.timeout });
+    const got = count ? await claimFound(db, result, { count, by: claimer(opts.as), note: opts.note, seconds }) : [];
+    if (opts.json) {
+      const taken = new Set(got.map((g) => g.key));
+      console.log(JSON.stringify({
+        recipe: result.recipe,
+        params: result.params,
+        matches: result.matches,
+        moreMatches: result.moreMatches,
+        claimedByOthers: result.claimed,
+        requested: count ?? 0,
+        claims: got.map((g) => ({ id: g.id, table: g.table, key: g.key, expiresAt: g.expiresAt, row: result.rows.find((r) => r.key === g.key)?.values ?? null })),
+        rows: result.rows.filter((r) => !r.claimedBy && !(r.key !== null && taken.has(r.key))).map((r) => r.values),
+      }, null, 2));
+    } else {
+      console.log(formatFindResult(result, got, { me: claimer(opts.as), requested: count }));
+    }
+    if (!got.length && !result.rows.some((r) => !r.claimedBy)) process.exitCode = 1;
+  })();
+}
 
 const recipes = program.command('recipes').description('List and check test data recipes');
 
@@ -555,7 +569,8 @@ claimsCmd
   .description('Release claims so others can use the rows')
   .option('--mine', 'release all of your claims')
   .option('--as <name>', 'who "you" are (default: $PROPMASTER_USER, or your OS user name)')
-  .action(run(async ({ db }, ids: string[], opts: { mine?: boolean; as?: string }) => {
+  .option('--force', "also release another tester's live claim")
+  .action(run(async ({ db }, ids: string[], opts: { mine?: boolean; as?: string; force?: boolean }) => {
     if (opts.mine) {
       const me = claimer(opts.as);
       const n = await claims.releaseAllBy(db, me);
@@ -563,16 +578,18 @@ claimsCmd
       return;
     }
     if (ids.length === 0) throw new UserError('Which claims?', 'Give claim ids (see `propmaster claims`), or --mine for all of yours.');
-    for (const r of await claims.release(db, ids)) say(` ${i.ok} Released claim #${r.id} ${c.dim(`· ${r.table.replace(/^public\./, '')} ${r.key} · held by ${r.claimedBy}`)}`);
+    for (const r of await claims.release(db, ids, { by: claimer(opts.as), force: opts.force })) say(` ${i.ok} Released claim #${r.id} ${c.dim(`· ${r.table.replace(/^public\./, '')} ${r.key} · held by ${r.claimedBy}`)}`);
   }));
 
 claimsCmd
   .command('extend')
   .argument('<claim>', 'claim id')
   .description('Keep a claim for longer')
-  .option('--for <duration>', 'how long from now: 30m, 2h, 1d', '2h')
-  .action(run(async ({ db }, id: string, opts: { for: string }) => {
-    const r = await claims.extend(db, id, claims.parseDuration(opts.for));
+  .option('--for <duration>', 'how much longer: 30m, 2h, 1d', '2h')
+  .option('--as <name>', 'who "you" are (default: $PROPMASTER_USER, or your OS user name)')
+  .option('--force', "also extend another tester's claim")
+  .action(run(async ({ db }, id: string, opts: { for: string; as?: string; force?: boolean }) => {
+    const r = await claims.extend(db, id, claims.parseDuration(opts.for), { by: claimer(opts.as), force: opts.force });
     say(` ${i.ok} Claim #${r.id} ${c.dim(`· ${r.table.replace(/^public\./, '')} ${r.key}`)} now lasts until ${c.bold(until(r.expiresAt))}`);
   }));
 

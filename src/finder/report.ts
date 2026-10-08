@@ -17,7 +17,7 @@ export function show(value: unknown): string {
   return String(value);
 }
 
-const matchCount = (n: number) => `${n} ${n === 1 ? 'match' : 'matches'}`;
+const matchCount = (n: number, more = false) => more ? `${n}+ matches` : `${n} ${n === 1 ? 'match' : 'matches'}`;
 const short = (table: string) => table.replace(/^public\./, '');
 
 /** "until 14:32", or "until 2026-10-09 09:00" when it's not today. */
@@ -53,12 +53,12 @@ export function formatRecipeList(recipes: Recipe[], source: string, { colors, wi
   ].join('\n');
 }
 
-export function formatFindResult(result: FindResult, claimed: ClaimRow[] = [], { colors, width, me }: ReportOptions & { me?: string } = {}): string {
+export function formatFindResult(result: FindResult, claimed: ClaimRow[] = [], { colors, width, me, requested }: ReportOptions & { me?: string; requested?: number } = {}): string {
   const s = makeStyle({ colors, width });
   const { c } = s;
   const i = icons(c);
   const params = Object.entries(result.params).map(([k, v]) => `${k}=${v}`).join(' ');
-  const counts = [matchCount(result.matches)];
+  const counts = [matchCount(result.matches, result.moreMatches)];
   if (result.claimed) counts.push(`${result.claimed} claimed`);
   counts.push(`${result.ms} ms`);
   const lines = [` ${brand(c)}  ${c.bold(result.recipe.name)}${params ? `  ${c.dim(params)}` : ''}`, ` ${c.dim(counts.join(' · '))}`, ''];
@@ -82,12 +82,15 @@ export function formatFindResult(result: FindResult, claimed: ClaimRow[] = [], {
   });
   lines.push(...boxTable(s, columns, rows));
   const more = result.matches - result.rows.length;
-  if (more > 0) lines.push(`   ${c.dim(`…and ${more} more (show more with --limit)`)}`);
+  if (more > 0 || result.moreMatches) lines.push(`   ${c.dim(`…and ${result.moreMatches ? 'many' : more} more (show more with --limit)`)}`);
 
   if (claimed.length) {
     lines.push('');
     for (const cl of claimed) {
       lines.push(` ${i.ok} Claimed ${c.bold(`${short(cl.table)} ${cl.key}`)} ${c.dim(`· claim #${cl.id} · until ${until(cl.expiresAt)}`)}`);
+    }
+    if (requested && claimed.length < requested) {
+      lines.push(` ${i.warn} ${c.yellow(`Only ${claimed.length} of the ${requested} rows you asked for were free.`)}`);
     }
     lines.push(hint(c, `when you are done: propmaster claims release ${claimed.map((cl) => cl.id).join(' ')}`));
   } else if (withStatus && result.rows.some((r) => !r.claimedBy)) {

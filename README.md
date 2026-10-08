@@ -268,7 +268,7 @@ $ propmaster find "never ordered" --claim --note "TC-142 first purchase"
    → when you are done: propmaster claims release 7
 ```
 
-**Writing recipes.** A recipe file holds one or more recipes. Each starts with `-- recipe: <name>`, then header comments, then one `SELECT`:
+**Writing recipes.** A recipe file holds one or more recipes. Each starts with `-- recipe: <name>`, then header comments (blank lines between them are fine), then one `SELECT`. Its ending `;` is optional, and comments may follow it:
 
 | Header line | Meaning |
 | --- | --- |
@@ -282,17 +282,17 @@ Parameters are sent to Postgres as **bind values** (`$1::int`), never pasted int
 
 **Finding.** `propmaster find` lists the recipes. `propmaster find <words>` runs the one recipe whose id or name matches, or whose name, description and tags contain every word (`find billing negative`). Pass values with `-p min_orders=3` (repeatable). Recipes come from `--recipes <folder or file>`, `$PROPMASTER_RECIPES`, or `./recipes`, and folders are searched recursively.
 
-**Claiming.** `--claim` claims the first free row, and `--claim 3` claims three. A claim lasts `--for 2h` (the default), and you can add `--note`. Claims belong to a person, not to the shared DB user: `--as <name>`, `$PROPMASTER_USER`, or your computer's user name. Rows others hold are listed last, marked with who holds them, and never handed out. Claiming is atomic, so two testers asking at the same moment never get the same row, and claims expire by themselves, so a forgotten claim never blocks anyone for long.
+**Claiming.** `--claim` claims the first free row, and `--claim 3` claims three (it says so when fewer were free). A claim lasts `--for 2h` (the default), and you can add `--note`. Claims belong to a person, not to the shared DB user: `--as <name>`, `$PROPMASTER_USER`, or your computer's user name. Rows others hold are listed last, marked with who holds them, and never handed out. Claiming is atomic, so two testers asking at the same moment never get the same row, and claims expire by themselves, so a forgotten claim never blocks anyone for long. When an expired claim's row is claimed again, the new claim gets a **new id**, so the first tester's `claims release <old id>` can't release it. Releasing or extending another tester's live claim needs `--force`.
 
 | Command | What it does |
 | --- | --- |
 | `claims` | Lists current claims (`--mine`, `--all` to include expired). |
 | `claims add <table> <key>` | Claims a row you picked yourself. |
-| `claims extend <id> --for 1h` | Keeps a claim for longer. |
-| `claims release <id…>` / `--mine` | Gives rows back. |
+| `claims extend <id> --for 1h` | Keeps a claim an hour longer (at most 30 days ahead). |
+| `claims release <id…>` / `--mine` | Gives rows back. `--force` for someone else's claim. |
 | `claims clear-expired` | Deletes claims that have run out. |
 
-**For automated tests.** `--json` prints the result for scripts: the rows, the claims you got, and each claimed row's values. The exit code is 1 when there's no free row:
+**For automated tests.** `--json` prints the result for scripts: the rows, the claims you got (and how many you asked for), and each claimed row's values. Errors are JSON too: `{ "error": ..., "hint": ... }`. The exit code is 1 when there's no free row or an error:
 
 ```js
 // Playwright, Cypress or any test runner
@@ -302,11 +302,15 @@ await page.fill('#email', claim.row.email);
 // ...and afterwards: propmaster claims release <claim.id>
 ```
 
+Claim for longer than the test can run: if the claim runs out and someone else takes the row, releasing the old id fails with "There is no claim", which tells you the test outlived its claim.
+
+**Big results.** Matches are counted up to 1,000 ("1000+ matches"): an exact count would read every matching row and turn a 2 ms query into seconds on a large table.
+
 **Checking recipes in CI.** `propmaster recipes check` runs every recipe against the database (with its defaults, limited to one row) and reports each as working, finding nothing, or **broken**: a renamed column, a dropped table, or a missing claim key after a migration. Recipes with a required parameter are checked with `EXPLAIN` instead of running. The exit code is 1 if any recipe is broken, and with `--strict` also if one finds nothing. Run it after migrations so testers never trip over a stale recipe.
 
-**In the web app**, the **Find data** page lists and searches recipes, shows a form for their parameters, runs them, and claims a row with one click. It also lists everyone's claims with **2 more hours** and **Release** buttons, and checks all recipes at once.
+**In the web app**, the **Find data** page lists and searches recipes, shows a form for their parameters, runs them, and claims a row with one click. It also lists everyone's claims with **2 more hours** and **Release** buttons (releasing someone else's claim asks first), and checks all recipes at once. **Claiming as** shows the name your claims are made under; change it there to match the `--as` or `$PROPMASTER_USER` name you use in the terminal.
 
-**Safety.** Recipes run in a **read-only transaction** with a time limit (`--timeout`, default 30 s), one statement each. A recipe can't change data, even by calling a function that writes. Finding needs only read access. Claims are stored in `_propmaster.claims`, created on the first claim; that needs the right to create a schema (or a DBA can run [sql/finder.sql](sql/finder.sql) once).
+**Safety.** Recipes run in a **read-only transaction** with a time limit (`--timeout`, default 30 s), one statement each. A recipe can't change data, even by calling a function that writes; a second statement is refused when the file is read. Finding needs only read access. Claims are stored in `_propmaster.claims`, created on the first claim; that needs the right to create a schema (or a DBA can run [sql/finder.sql](sql/finder.sql) once).
 
 [demo/recipes/shop.sql](demo/recipes/shop.sql) has six example recipes for the demo shop.
 

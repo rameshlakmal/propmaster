@@ -49,6 +49,9 @@ The Test Data Finder runs testers' own SQL on a shared database and hands out ro
 | R25 | A recipe breaks after a migration and nobody notices | High · Med | `recipes check` runs every recipe (or `EXPLAIN`s it when a value is required) and fails CI when one is broken | `checkRecipes` integration test (missing table, missing claim key, broken query with a required parameter), CLI exit-code test |
 | R26 | A forgotten claim blocks a row for good, or claims make the recorder look installed | Med · Med | Claims expire and are taken over after; the recorder checks for its own tables, not the schema | `lets an expired claim be taken over`, `keeps claims and the recorder apart` |
 | R27 | A tester without write access can't use the Finder | High · Med | Finding needs only SELECT; claiming says which grant is missing | `works for a user who may only read` |
+| R28 | A tester's stale claim id releases or extends a colleague's claim (after a takeover, or a typo) | Med · **High** | A taken-over claim gets a new id; another tester's live claim needs `--force` (in the web app, a second click) | `lets an expired claim be taken over` (old id is gone), `won't release or extend another tester's claim without force`, CLI and web app tests |
+| R29 | A recipe is silently misread: header lines after a blank line ignored, a trailing `; -- comment` or a second statement | Med · Med | The header runs to the first code line; the query ends at its `;` found by the SQL scanner; a second statement is refused when the file is read | Recipe unit tests (blank lines, `;` in strings and comments, two statements) |
+| R30 | Finding is slow on a big table because every match is counted | Med · Med | Counting stops at 1,000; enough rows are read to skip everyone's claims | `counts matches only up to 1000`, `still finds free rows when the first ones are claimed`; measured 2.6 s → ms on 3 million rows |
 
 ## 3. Test levels
 

@@ -1,6 +1,6 @@
 import { Badge, Box, Button, Card, Flex, Heading, Select, Switch, Table, Text, TextField } from '@radix-ui/themes';
-import { CheckCircle, FolderOpen, HandGrabbing, MagnifyingGlass, Stethoscope, Timer, Warning, XCircle } from '@phosphor-icons/react';
-import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle, FolderOpen, HandGrabbing, MagnifyingGlass, PencilSimple, Stethoscope, Timer, Warning, XCircle } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
 import { toError, useLoad } from '../hooks';
@@ -14,6 +14,8 @@ function show(v: unknown): string {
 }
 
 const short = (table: string) => table.replace(/^public\./, '');
+
+const matchCount = (r: FindResult) => (r.moreMatches ? `${r.matches}+ matches` : `${r.matches} ${r.matches === 1 ? 'match' : 'matches'}`);
 
 /** "14:32", or "9 Oct 14:32" when it's not today. */
 function until(iso: string): string {
@@ -71,7 +73,7 @@ function Results({ result, me, busyKey, onClaim }: { result: FindResult; me: str
   if (result.rows.length === 0) {
     return <EmptyState icon={<MagnifyingGlass size={32} />} title="No rows match">Try other parameter values, or create the data you need.</EmptyState>;
   }
-  const more = result.matches - result.rows.length;
+  const more = result.moreMatches ? 'many' : result.matches - result.rows.length;
   return (
     <Box>
       <Table.Root variant="surface" size="1">
@@ -99,12 +101,13 @@ function Results({ result, me, busyKey, onClaim }: { result: FindResult; me: str
           ))}
         </Table.Body>
       </Table.Root>
-      {more > 0 && <Text as="p" size="1" color="gray" mt="2">…and {more} more. Make the recipe narrower to see them.</Text>}
+      {more !== 0 && <Text as="p" size="1" color="gray" mt="2">…and {more} more. Make the recipe narrower to see them.</Text>}
     </Box>
   );
 }
 
-function RecipePanel({ recipe, me, onClaimed }: { recipe: Recipe; me: string; onClaimed: () => void }) {
+/** `claimsChanged` goes up when claims change elsewhere on the page: the shown rows are then found again. */
+function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe; me: string; claimsChanged: number; onClaimed: () => void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [duration, setDuration] = useState(() => sessionStorage.getItem('propmaster-claim-duration') ?? '2h');
   const [note, setNote] = useState('');
@@ -134,6 +137,15 @@ function RecipePanel({ recipe, me, onClaimed }: { recipe: Recipe; me: string; on
     onClaimed();
   });
   const required = recipe.params.filter((p) => p.default === undefined && !values[p.name]?.trim());
+
+  // Keep the table's "Yours" and "Claim" in step with releases and extensions in the Claims card.
+  const shown = useRef<{ recipe: string; params: Record<string, string> } | null>(null);
+  useEffect(() => { shown.current = result ? { recipe: recipe.id, params: values } : null; }, [result]);
+  useEffect(() => {
+    const last = shown.current;
+    if (!claimsChanged || !last || last.recipe !== recipe.id) return;
+    api<{ result: FindResult }>('POST', '/find', last).then((res) => setResult(res.result), () => undefined);
+  }, [claimsChanged]);
 
   return (
     <Flex direction="column" gap="4">
@@ -207,7 +219,7 @@ function RecipePanel({ recipe, me, onClaimed }: { recipe: Recipe; me: string; on
       {result && (
         <Box>
           <Flex gap="2" mb="3" wrap="wrap" align="center">
-            <Badge size="2" color="indigo">{result.matches} {result.matches === 1 ? 'match' : 'matches'}</Badge>
+            <Badge size="2" color="indigo">{matchCount(result)}</Badge>
             {result.claimed > 0 && <Badge size="2" color="amber">{result.claimed} claimed</Badge>}
             <Text size="1" color="gray">{result.ms} ms</Text>
           </Flex>
@@ -230,12 +242,45 @@ function TimeLeft({ iso }: { iso: string }) {
   return <Text size="2" color={m < 15 ? 'amber' : 'gray'}>{m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`}</Text>;
 }
 
-function Claims({ version, activeProfile }: { version: number; activeProfile: string | null }) {
+/** "Claiming as ramesh · Change": the name claims are made under, saved for this computer. */
+function ClaimingAs({ me, onChanged }: { me: string; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
+  const save = async () => {
+    setError(null);
+    try { await api('PUT', '/claimer', { name }); setEditing(false); onChanged(); } catch (err) { setError(toError(err)); }
+  };
+  if (!editing) {
+    return (
+      <Text size="2" color="gray">
+        Claiming as <Text weight="medium" color="grass">{me || '…'}</Text>{' '}
+        <Button size="1" variant="ghost" onClick={() => { setName(me); setEditing(true); }} aria-label="Change the name you claim as"><PencilSimple /> Change</Button>
+      </Text>
+    );
+  }
+  return (
+    <Flex direction="column" gap="1">
+      <Flex gap="2" align="center">
+        <TextField.Root size="1" value={name} onChange={(e) => setName(e.target.value)} aria-label="Your name for claims" placeholder="your name"
+          autoFocus onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }} />
+        <Button size="1" onClick={() => void save()}>Save</Button>
+        <Button size="1" variant="soft" color="gray" onClick={() => setEditing(false)}>Cancel</Button>
+      </Flex>
+      <Text size="1" color="gray">Use the same name as in the terminal ($PROPMASTER_USER). Leave it empty for your computer's user name.</Text>
+      {error && <ErrorCallout error={error} />}
+    </Flex>
+  );
+}
+
+function Claims({ version, activeProfile, onChanged }: { version: number; activeProfile: string | null; onChanged: () => void }) {
   const [all, setAll] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
   const data = useLoad(() => api<{ me: string; claims: ClaimRow[] }>('GET', `/claims${all ? '?all=1' : ''}`), [all, version, activeProfile], 15000);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  // Releasing another tester's claim takes a second click.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const me = data.data?.me ?? '';
   const shown = (data.data?.claims ?? []).filter((c) => !mineOnly || c.claimedBy === me);
   const mine = (data.data?.claims ?? []).filter((c) => c.claimedBy === me && !c.expired).length;
@@ -243,7 +288,7 @@ function Claims({ version, activeProfile }: { version: number; activeProfile: st
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
     setError(null);
-    try { await fn(); await data.refresh(); } catch (err) { setError(toError(err)); } finally { setBusy(null); }
+    try { await fn(); await data.refresh(); onChanged(); } catch (err) { setError(toError(err)); } finally { setBusy(null); setConfirming(null); }
   };
 
   return (
@@ -251,7 +296,8 @@ function Claims({ version, activeProfile }: { version: number; activeProfile: st
       <Flex justify="between" align="center" mb="3" gap="3" wrap="wrap">
         <Box>
           <Heading as="h2" size="3">Claims</Heading>
-          <Text as="p" size="1" color="gray">Rows testers on this database are using. They are released automatically when they expire.</Text>
+          <Text as="p" size="1" color="gray" mb="1">Rows testers on this database are using. They are released automatically when they expire.</Text>
+          <ClaimingAs me={me} onChanged={() => { void data.refresh(); onChanged(); }} />
         </Box>
         <Flex gap="4" align="center" wrap="wrap">
           <Text as="label" size="2"><Flex gap="2" align="center"><Switch size="1" checked={mineOnly} onCheckedChange={setMineOnly} /> Only mine</Flex></Text>
@@ -284,14 +330,27 @@ function Claims({ version, activeProfile }: { version: number; activeProfile: st
                 <Table.Cell><Text size="2" color="gray">{[c.recipe, c.note].filter(Boolean).join(' · ') || '–'}</Text></Table.Cell>
                 <Table.Cell>
                   <Flex gap="2" justify="end">
-                    {!c.expired && (
+                    {!c.expired && c.claimedBy === me && (
                       <Button size="1" variant="soft" color="gray" loading={busy === `extend-${c.id}`} onClick={() => void act(`extend-${c.id}`, () => api('POST', `/claims/${c.id}/extend`, { duration: '2h' }))}>
                         <Timer /> 2 more hours
                       </Button>
                     )}
-                    <Button size="1" variant="soft" loading={busy === `release-${c.id}`} onClick={() => void act(`release-${c.id}`, () => api('POST', `/claims/${c.id}/release`))}>
-                      Release
-                    </Button>
+                    {c.claimedBy === me || c.expired ? (
+                      <Button size="1" variant="soft" loading={busy === `release-${c.id}`} onClick={() => void act(`release-${c.id}`, () => api('POST', `/claims/${c.id}/release`))}>
+                        Release
+                      </Button>
+                    ) : confirming === c.id ? (
+                      <>
+                        <Button size="1" color="red" loading={busy === `release-${c.id}`} onClick={() => void act(`release-${c.id}`, () => api('POST', `/claims/${c.id}/release`, { force: true }))}>
+                          Release {c.claimedBy}'s claim
+                        </Button>
+                        <Button size="1" variant="soft" color="gray" onClick={() => setConfirming(null)}>Keep</Button>
+                      </>
+                    ) : (
+                      <Button size="1" variant="soft" color="gray" onClick={() => setConfirming(c.id)} title={`This is ${c.claimedBy}'s claim`}>
+                        Release…
+                      </Button>
+                    )}
                   </Flex>
                 </Table.Cell>
               </Table.Row>
@@ -341,7 +400,8 @@ export function FindPage({ activeProfile }: { activeProfile: string | null }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [checks, setChecks] = useState<RecipeCheck[] | null>(null);
   const [claimsVersion, setClaimsVersion] = useState(0);
-  const me = useLoad(() => api<{ me: string }>('GET', '/claims').then((r) => r.me), [activeProfile]);
+  const [claimsChanged, setClaimsChanged] = useState(0);
+  const me = useLoad(() => api<{ me: string }>('GET', '/claimer').then((r) => r.me), [activeProfile]);
 
   const recipes = useMemo(() => source.data?.recipes ?? [], [source.data]);
   const recipe = recipes.find((r) => r.id === selected) ?? recipes[0] ?? null;
@@ -387,11 +447,11 @@ export function FindPage({ activeProfile }: { activeProfile: string | null }) {
       ) : (
         <div className="find-grid">
           <Card size="2"><RecipeList recipes={recipes} selected={recipe?.id ?? null} onSelect={select} /></Card>
-          <Card size="3">{recipe && <RecipePanel recipe={recipe} me={me.data ?? ''} onClaimed={() => setClaimsVersion((v) => v + 1)} />}</Card>
+          <Card size="3">{recipe && <RecipePanel recipe={recipe} me={me.data ?? ''} claimsChanged={claimsChanged} onClaimed={() => setClaimsVersion((v) => v + 1)} />}</Card>
         </div>
       )}
 
-      <Claims version={claimsVersion} activeProfile={activeProfile} />
+      <Claims version={claimsVersion} activeProfile={activeProfile} onChanged={() => { setClaimsChanged((v) => v + 1); void me.refresh(); }} />
     </Box>
   );
 }

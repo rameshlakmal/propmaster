@@ -69,9 +69,10 @@ export function parseRecipes(text: string, file = 'recipe file'): Recipe[] {
     const description: string[] = [];
     let i = 0;
 
-    // The header: the comment lines right after "-- recipe:".
+    // The header: the comment lines right after "-- recipe:", blank lines included, up to the first code.
     for (; i < current.lines.length; i++) {
       const { text: line, line: n } = current.lines[i]!;
+      if (!line.trim()) continue;
       if (!/^\s*--/.test(line)) break;
       const d = DIRECTIVE.exec(line);
       if (!d) {
@@ -98,9 +99,7 @@ export function parseRecipes(text: string, file = 'recipe file'): Recipe[] {
       seen.add(p.name);
     }
 
-    recipe.sql = current.lines.slice(i).map((l) => l.text).join('\n').trim().replace(/;\s*$/, '').trim();
-    const code = recipe.sql.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n').trim();
-    if (!code) throw new UserError(`Recipe "${current.name}" (${where}) has no query.`);
+    recipe.sql = oneStatement(current.lines.slice(i).map((l) => l.text).join('\n'), `Recipe "${current.name}" (${where})`);
 
     // Every :name must be declared, and every declared parameter used: both are usually typos.
     const used = new Set(placeholders(recipe.sql));
@@ -146,6 +145,22 @@ function parseParam(text: string, where: string): Param {
   return param;
 }
 
+/**
+ * The query up to its ending ";" (comments after it are fine). A second statement is refused: recipes
+ * are one SELECT, and the driver would reject it anyway, with a less helpful message.
+ */
+function oneStatement(text: string, what: string): string {
+  const [first, ...rest] = scan(text, { semicolon: () => '\u0000' }).split('\u0000');
+  if (!codeOf(first!)) throw new UserError(`${what} has no query.`);
+  if (rest.some((part) => codeOf(part))) {
+    throw new UserError(`${what} has more than one SQL statement.`, 'A recipe is one SELECT. Put each query in its own "-- recipe:" block.');
+  }
+  return first!.trim();
+}
+
+/** The SQL without its comments, trimmed: empty when there is no code. */
+const codeOf = (sql: string): string => scan(sql, { comment: () => ' ' }).trim();
+
 /** A default may be quoted so it can hold spaces or a "|": 'two words'. */
 function unquote(value: string): string {
   const v = value.trim();
@@ -155,7 +170,7 @@ function unquote(value: string): string {
 const CHECKS: Partial<Record<ParamType, [RegExp, string]>> = {
   int: [/^[+-]?\d+$/, 'a whole number'],
   bigint: [/^[+-]?\d+$/, 'a whole number'],
-  numeric: [/^[+-]?(\d+(\.\d*)?|\.\d+)$/, 'a number'],
+  numeric: [/^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i, 'a number'],
   boolean: [/^(true|false|t|f|yes|no|on|off|1|0)$/i, 'true or false'],
   date: [/^\d{4}-\d\d-\d\d$|^(today|yesterday|tomorrow)$/i, 'a date like 2024-01-31'],
 };
@@ -170,11 +185,21 @@ export function checkValue(param: Param, value: string, where?: string): void {
 
 // ---------- placeholders ----------
 
+interface ScanHooks {
+  /** A :name placeholder (lowercased) → its replacement. Default: left as written. */
+  placeholder?: (name: string) => string;
+  /** A comment → its replacement. Default: left as written. */
+  comment?: (text: string) => string;
+  /** A ";" outside strings and comments → its replacement. Default: left as written. */
+  semicolon?: () => string;
+}
+
 /**
- * Finds :name placeholders outside strings, quoted names and comments, and not part of a :: cast.
- * Calls `onPlaceholder` for each one and returns the SQL with each replaced by what it returns.
+ * Walks SQL the way Postgres reads it: strings, quoted names, comments and dollar quotes are skipped, so
+ * only real :name placeholders (not :: casts or arr[1:n] slices), comments and statement ends are seen.
+ * Returns the SQL with each of those replaced by what its hook returns.
  */
-function scan(sql: string, onPlaceholder: (name: string) => string): string {
+function scan(sql: string, hooks: ScanHooks): string {
   let out = '';
   let i = 0;
   const n = sql.length;
@@ -185,7 +210,7 @@ function scan(sql: string, onPlaceholder: (name: string) => string): string {
     if (ch === '-' && next === '-') { // line comment
       const end = sql.indexOf('\n', i);
       const stop = end === -1 ? n : end;
-      out += sql.slice(i, stop);
+      out += hooks.comment ? hooks.comment(sql.slice(i, stop)) : sql.slice(i, stop);
       i = stop;
     } else if (ch === '/' && next === '*') { // block comment, nested as in Postgres
       let depth = 1;
@@ -193,7 +218,7 @@ function scan(sql: string, onPlaceholder: (name: string) => string): string {
       while (j < n && depth > 0) {
         if (sql[j] === '/' && sql[j + 1] === '*') { depth++; j += 2; } else if (sql[j] === '*' && sql[j + 1] === '/') { depth--; j += 2; } else j++;
       }
-      out += sql.slice(i, j);
+      out += hooks.comment ? hooks.comment(sql.slice(i, j)) : sql.slice(i, j);
       i = j;
     } else if (ch === "'" || ch === '"') { // string or quoted name; E'..' strings allow backslash escapes
       const escapes = ch === "'" && /[eE]/.test(sql[i - 1] ?? '') && !/[a-zA-Z0-9_]/.test(sql[i - 2] ?? '');
@@ -219,12 +244,15 @@ function scan(sql: string, onPlaceholder: (name: string) => string): string {
         out += ch;
         i++;
       }
+    } else if (ch === ';') {
+      out += hooks.semicolon ? hooks.semicolon() : ch;
+      i++;
     } else if (ch === ':' && next === ':') { // a cast
       out += '::';
       i += 2;
     } else if (ch === ':' && /[a-zA-Z_]/.test(next ?? '') && !/[a-zA-Z0-9_\]]/.test(sql[i - 1] ?? '')) {
       const name = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(sql.slice(i + 1))![0];
-      out += onPlaceholder(name.toLowerCase());
+      out += hooks.placeholder ? hooks.placeholder(name.toLowerCase()) : `:${name}`;
       i += 1 + name.length;
     } else {
       out += ch;
@@ -237,9 +265,11 @@ function scan(sql: string, onPlaceholder: (name: string) => string): string {
 /** The :name placeholders a query uses, in order of first use. */
 export function placeholders(sql: string): string[] {
   const names: string[] = [];
-  scan(sql, (name) => {
-    if (!names.includes(name)) names.push(name);
-    return '';
+  scan(sql, {
+    placeholder: (name) => {
+      if (!names.includes(name)) names.push(name);
+      return '';
+    },
   });
   return names;
 }
@@ -255,16 +285,18 @@ export function bind(recipe: Recipe, given: Record<string, string | undefined> =
 
   const values: (string | null)[] = [];
   const index = new Map<string, number>();
-  const sql = scan(recipe.sql, (name) => {
-    const param = recipe.params.find((p) => p.name === name)!;
-    if (!index.has(name)) {
-      const value = lower[name] ?? param.default;
-      if (value === undefined) throw new UserError(`"${recipe.name}" needs a value for :${name}${param.description ? ` (${param.description})` : ''}.`, `Pass it with -p ${name}=<value>`);
-      checkValue(param, value);
-      values.push(value);
-      index.set(name, values.length);
-    }
-    return `$${index.get(name)}::${param.type}`;
+  const sql = scan(recipe.sql, {
+    placeholder: (name) => {
+      const param = recipe.params.find((p) => p.name === name)!;
+      if (!index.has(name)) {
+        const value = lower[name] ?? param.default;
+        if (value === undefined) throw new UserError(`"${recipe.name}" needs a value for :${name}${param.description ? ` (${param.description})` : ''}.`, `Pass it with -p ${name}=<value>`);
+        checkValue(param, value);
+        values.push(value);
+        index.set(name, values.length);
+      }
+      return `$${index.get(name)}::${param.type}`;
+    },
   });
   return { sql, values };
 }
@@ -272,9 +304,11 @@ export function bind(recipe: Recipe, given: Record<string, string | undefined> =
 /** Like bind, but every parameter is NULL: enough for EXPLAIN to check a recipe that has required parameters. */
 export function bindNulls(recipe: Recipe): { sql: string; values: null[] } {
   const index = new Map<string, number>();
-  const sql = scan(recipe.sql, (name) => {
-    if (!index.has(name)) index.set(name, index.size + 1);
-    return `$${index.get(name)}::${recipe.params.find((p) => p.name === name)!.type}`;
+  const sql = scan(recipe.sql, {
+    placeholder: (name) => {
+      if (!index.has(name)) index.set(name, index.size + 1);
+      return `$${index.get(name)}::${recipe.params.find((p) => p.name === name)!.type}`;
+    },
   });
   return { sql, values: Array.from({ length: index.size }, () => null) };
 }

@@ -20,6 +20,8 @@ export interface Profile {
 export interface UiConfig {
   profiles: Profile[];
   active?: string;
+  /** The name claims are made under in the web app; unset means $PROPMASTER_USER or the OS user name. */
+  claimAs?: string;
 }
 
 function configPath(): string {
@@ -37,7 +39,7 @@ export async function readConfig(): Promise<UiConfig> {
     throw new UserError(`Can't read the settings file ${path}: ${err instanceof Error ? err.message : String(err)}`,
       'Fix the file, or delete it to start again (your saved connections are in it).');
   }
-  return { profiles: Array.isArray(config.profiles) ? config.profiles : [], active: config.active };
+  return { profiles: Array.isArray(config.profiles) ? config.profiles : [], active: config.active, claimAs: typeof config.claimAs === 'string' ? config.claimAs : undefined };
 }
 
 async function writeConfig(config: UiConfig): Promise<void> {
@@ -91,6 +93,16 @@ export async function setRecipesPath(name: string, recipesPath: string): Promise
   const profile = config.profiles.find((p) => p.name === name);
   if (!profile) throw new UserError(`There is no connection called "${name}".`);
   profile.recipesPath = recipesPath;
+  await writeConfig(config);
+  return config;
+}
+
+/** Sets (or, with an empty name, clears) the name the web app claims rows under. */
+export async function setClaimAs(name: string): Promise<UiConfig> {
+  const config = await readConfig();
+  const clean = name.trim();
+  if (clean.length > 60) throw new UserError('Keep the name under 60 characters.');
+  config.claimAs = clean || undefined;
   await writeConfig(config);
   return config;
 }

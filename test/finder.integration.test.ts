@@ -62,8 +62,26 @@ describe('find', () => {
   it('refuses recipes that change data', async () => {
     await expect(find(db, recipe("SELECT place_order(3, 1, 1) AS id"))).rejects.toThrow('"Test" (test.sql, line 1) tried to change data. Recipes may only read.');
     await expect(find(db, recipe("SELECT nextval('orders_id_seq') AS id"))).rejects.toThrow('tried to change data');
-    await expect(find(db, recipe('SELECT 1; DELETE FROM orders'))).rejects.toThrow(/failed: (cannot insert multiple commands|syntax error)/);
     expect((await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n).toBe(3);
+  });
+
+  it('counts matches only up to 1000, so a big result stays fast', async () => {
+    const r = await find(db, recipe('SELECT g AS id FROM generate_series(1, 5000) g ORDER BY g DESC'), { limit: 3 });
+    expect(r).toMatchObject({ matches: 1000, moreMatches: true });
+    expect(r.rows.map((row) => row.values.id)).toEqual([5000, 4999, 4998]);
+    expect(await find(db, recipe('SELECT g AS id FROM generate_series(1, 1000) g'))).toMatchObject({ matches: 1000, moreMatches: false });
+  });
+
+  it('still finds free rows when the first ones are claimed, with the count limit', async () => {
+    const big = recipe('-- claim: customers\nSELECT c.id FROM customers c, generate_series(1, 400) g ORDER BY c.id');
+    await claims.claimByKey(db, 'customers', '1', { by: 'ana', seconds: 60 });
+    const r = await find(db, big, { limit: 1 });
+    expect(r.rows[0]!.key).toBe('2');
+  });
+
+  it('names columns that appear twice', async () => {
+    await expect(find(db, recipe('-- claim: customers\nSELECT c.id, o.id FROM customers c JOIN orders o ON o.customer_id = c.id')))
+      .rejects.toThrow('"Test" (test.sql, line 1) returns two columns named "id".');
   });
 
   it('stops a slow recipe at the time limit', async () => {
@@ -146,7 +164,19 @@ describe('claims', () => {
     const fresh = await find(db, pickRecipe(shop, 'never ordered'));
     expect(fresh.rows[0]!.claimedBy).toBeNull();
     const [taken] = await claimFound(db, fresh, as('ben'));
-    expect(taken).toMatchObject({ id: old!.id, key: '3', claimedBy: 'ben', expired: false });
+    expect(taken).toMatchObject({ key: '3', claimedBy: 'ben', expired: false });
+    // A new id: Ana's script cleaning up "her" claim afterwards must not release Ben's.
+    expect(taken!.id).not.toBe(old!.id);
+    await expect(claims.release(db, [old!.id], { by: 'ana' })).rejects.toThrow(`There is no claim #${old!.id}.`);
+    await expect(claims.extend(db, old!.id, 60, { by: 'ana' })).rejects.toThrow(`There is no claim #${old!.id}.`);
+    expect((await claims.list(db)).map((c) => c.claimedBy)).toEqual(['ben']);
+  });
+
+  it("won't release or extend another tester's claim without force", async () => {
+    const bens = await claims.claimByKey(db, 'customers', '2', { by: 'ben', seconds: 60 });
+    await expect(claims.release(db, [bens.id], { by: 'ana' })).rejects.toThrow(`Claim #${bens.id} (customers 2) is ben's, not yours.`);
+    await expect(claims.extend(db, bens.id, 60, { by: 'ana' })).rejects.toThrow("is ben's, not yours.");
+    expect((await claims.release(db, [bens.id], { by: 'ana', force: true })).map((c) => c.claimedBy)).toEqual(['ben']);
   });
 
   it('adds, extends and releases claims by hand', async () => {
@@ -154,13 +184,17 @@ describe('claims', () => {
     await expect(claims.claimByKey(db, 'orders', '2', { by: 'ben', seconds: 60 })).rejects.toThrow(`orders 2 is already claimed by ana (claim #${added.id}).`);
     await expect(claims.claimByKey(db, 'orders', '99', { by: 'ben', seconds: 60 })).rejects.toThrow('orders has no row with id = 99.');
 
-    const extended = await claims.extend(db, added.id, 86400);
-    expect(new Date(extended.expiresAt).getTime() - Date.now()).toBeGreaterThan(86000 * 1000);
+    // Extending adds to the time left: 60 s + 1 day.
+    const extended = await claims.extend(db, added.id, 86400, { by: 'ana' });
+    expect(new Date(extended.expiresAt).getTime() - Date.now()).toBeGreaterThan(86440 * 1000);
+    // ...but never more than 30 days ahead.
+    const capped = await claims.extend(db, added.id, 30 * 86400, { by: 'ana' });
+    expect(new Date(capped.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(30 * 86400 * 1000 + 5000);
 
     await claims.claimByKey(db, 'customers', '1', { by: 'ana', seconds: 60 });
     await claims.claimByKey(db, 'customers', '2', { by: 'ben', seconds: 60 });
-    expect((await claims.release(db, [`#${added.id}`])).map((c) => c.key)).toEqual(['2']);
-    await expect(claims.release(db, ['999'])).rejects.toThrow('There is no claim #999.');
+    expect((await claims.release(db, [`#${added.id}`], { by: 'ana' })).map((c) => c.key)).toEqual(['2']);
+    await expect(claims.release(db, ['999'], { by: 'ana' })).rejects.toThrow('There is no claim #999.');
     expect(await claims.releaseAllBy(db, 'ana')).toBe(1);
     expect((await claims.list(db)).map((c) => c.claimedBy)).toEqual(['ben']);
 

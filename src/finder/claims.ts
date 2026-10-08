@@ -77,7 +77,12 @@ async function ensureClaims(db: Db): Promise<void> {
       throw new UserError('Your DB user may not create the _propmaster schema, so claims can\'t be stored.',
         'Finding works without it. To claim, ask a DBA once for: GRANT CREATE ON DATABASE <db> TO <user>; or to run sql/finder.sql for you.');
     }
-    if (code === '23505' && (await claimsExist(db))) return; // someone else created it at the same moment
+    // Someone else created the schema or table at the same moment: unique violation, or duplicate schema/table.
+    if (code === '23505' || code === '42P06' || code === '42P07') {
+      if (await claimsExist(db)) return;
+      await db.query(await readFile(INSTALL_SQL, 'utf8')); // the schema was theirs; the table is still missing
+      return;
+    }
     throw err;
   }
 }
@@ -99,6 +104,7 @@ const SELECT = `
 /**
  * Claims the first `count` candidates nobody holds. An expired claim is taken over. Each row is one
  * INSERT ... ON CONFLICT statement, so a row another tester is claiming at the same moment is skipped.
+ * A taken-over claim gets a new id: the old holder's `claims release <old id>` must not release it.
  */
 export async function claim(db: Db, req: ClaimRequest): Promise<ClaimRow[]> {
   await ensureClaims(db);
@@ -110,7 +116,7 @@ export async function claim(db: Db, req: ClaimRequest): Promise<ClaimRow[]> {
       INSERT INTO _propmaster.claims AS c (table_name, row_key, claimed_by, recipe, note, expires_at)
       VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6))
       ON CONFLICT (table_name, row_key) DO UPDATE
-         SET claimed_by = EXCLUDED.claimed_by, recipe = EXCLUDED.recipe, note = EXCLUDED.note,
+         SET id = nextval(pg_get_serial_sequence('_propmaster.claims', 'id')), claimed_by = EXCLUDED.claimed_by, recipe = EXCLUDED.recipe, note = EXCLUDED.note,
              claimed_at = now(), expires_at = EXCLUDED.expires_at
        WHERE c.expires_at <= now()
       RETURNING id::text AS id`, [req.table, key, req.by, req.recipe ?? null, req.note ?? null, req.seconds]);
@@ -149,13 +155,33 @@ const parseIds = (ids: string[]): string[] => ids.map((id) => {
   return clean;
 });
 
+export interface OwnerOptions {
+  /** Who is asking. Another person's live claim is refused unless `force` is set. */
+  by: string;
+  force?: boolean;
+}
+
+const GONE = 'It may have been released, or have run out and been claimed by someone else (who then got a new claim id).';
+
+/** Refuses to touch another person's live claim without `force`: it is usually a mistyped or stale id. */
+function checkOwner(found: ClaimRow[], { by, force }: OwnerOptions, action: string): void {
+  if (force) return;
+  const theirs = found.filter((c) => c.claimedBy !== by && !c.expired);
+  if (theirs.length) {
+    const list = theirs.map((c) => `#${c.id} (${c.table.replace(/^public\./, '')} ${c.key}) is ${c.claimedBy}'s`).join(', ');
+    throw new UserError(`Claim ${list}, not yours.`, `To ${action} it anyway, add --force.`);
+  }
+}
+
 /** Releases claims by id. Returns the ones that were released. */
-export async function release(db: Db, ids: string[]): Promise<ClaimRow[]> {
+export async function release(db: Db, ids: string[], owner: OwnerOptions): Promise<ClaimRow[]> {
   const clean = parseIds(ids);
-  if (!(await claimsExist(db))) throw new UserError(`There is no claim #${clean[0]}.`);
+  if (!(await claimsExist(db))) throw new UserError(`There is no claim #${clean[0]}.`, GONE);
   const found = await byIds(db, clean);
   const missing = clean.filter((id) => !found.some((c) => c.id === id));
-  if (missing.length) throw new UserError(`There is no claim ${missing.map((m) => `#${m}`).join(', ')}.`, 'See the current claims with: propmaster claims');
+  if (missing.length) throw new UserError(`There is no claim ${missing.map((m) => `#${m}`).join(', ')}.`, `${GONE} See the current claims with: propmaster claims`);
+  checkOwner(found, owner, 'release');
+  // Only the claims as they were read: one taken over in the meantime has a new id and is left alone.
   await db.query('DELETE FROM _propmaster.claims WHERE id = ANY($1::bigint[])', [clean]);
   return found;
 }
@@ -174,13 +200,22 @@ export async function clearExpired(db: Db): Promise<number> {
   return rowCount ?? 0;
 }
 
-/** Makes a claim last `seconds` from now. An expired claim can be renewed only if nobody took the row since. */
-export async function extend(db: Db, id: string, seconds: number): Promise<ClaimRow> {
+/**
+ * Keeps a claim `seconds` longer: added to its current end, or to now if it has run out. A claim never
+ * reaches more than 30 days ahead. An expired claim can be renewed only if nobody took the row since
+ * (a taken-over claim has a new id).
+ */
+export async function extend(db: Db, id: string, seconds: number, owner: OwnerOptions): Promise<ClaimRow> {
   const [clean] = parseIds([id]);
-  if (!(await claimsExist(db))) throw new UserError(`There is no claim #${clean}.`);
-  const { rowCount } = await db.query(
-    'UPDATE _propmaster.claims SET expires_at = now() + make_interval(secs => $2) WHERE id = $1', [clean, seconds]);
-  if (!rowCount) throw new UserError(`There is no claim #${clean}.`, 'It may have been released, or taken over after it expired.');
+  if (!(await claimsExist(db))) throw new UserError(`There is no claim #${clean}.`, GONE);
+  const [found] = await byIds(db, [clean!]);
+  if (!found) throw new UserError(`There is no claim #${clean}.`, GONE);
+  checkOwner([found], owner, 'extend');
+  const { rowCount } = await db.query(`
+    UPDATE _propmaster.claims
+       SET expires_at = least(greatest(expires_at, now()) + make_interval(secs => $2), now() + interval '30 days')
+     WHERE id = $1`, [clean, seconds]);
+  if (!rowCount) throw new UserError(`There is no claim #${clean}.`, GONE);
   return (await byIds(db, [clean!]))[0]!;
 }
 

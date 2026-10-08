@@ -71,6 +71,18 @@ describe('parseRecipes', () => {
     expect(() => parseRecipes('-- recipe: X\n-- param: id int\n-- param: id int\nSELECT :id', 'r.sql')).toThrow('parameter :id is declared twice');
     expect(() => parseRecipes('-- recipe: X\n-- claim: customers by id\nSELECT 1', 'r.sql')).toThrow('can\'t read "-- claim: customers by id"');
     expect(() => parseRecipes('-- recipe: X\n-- claim: a\n-- claim: b\nSELECT 1', 'r.sql')).toThrow('more than one "-- claim:" line');
+    expect(() => parseRecipes('-- recipe: Two\nSELECT 1; DELETE FROM orders', 'r.sql')).toThrow('Recipe "Two" (r.sql, line 1) has more than one SQL statement.');
+    expect(() => parseRecipes('-- recipe: X\n;', 'r.sql')).toThrow('has no query');
+  });
+
+  it('keeps reading the header across blank lines', () => {
+    const [r] = parseRecipes('-- recipe: Spaced\n\n-- For a test.\n\n-- tags: a\n-- claim: customers\n\nSELECT id FROM customers');
+    expect(r).toMatchObject({ description: 'For a test.', tags: ['a'], claim: { table: 'customers' }, sql: 'SELECT id FROM customers' });
+  });
+
+  it('ends the query at its ";", with comments after it, but not at one in a string or comment', () => {
+    expect(parseRecipes('-- recipe: X\nSELECT 1 AS x; -- the end\n-- more notes')[0]!.sql).toBe('SELECT 1 AS x');
+    expect(parseRecipes("-- recipe: X\nSELECT ';' AS a, $$;$$ AS b -- c;\n/* d; */ FROM t;")[0]!.sql).toBe("SELECT ';' AS a, $$;$$ AS b -- c;\n/* d; */ FROM t");
   });
 
   it('reads the demo recipes', async () => {
@@ -110,6 +122,9 @@ describe('placeholders and binding', () => {
     expect(() => bind(r!, { n: '1', nn: '2' })).toThrow('"X" has no parameter :nn.');
     expect(() => bind(r!, { n: '1.5' })).toThrow(':n must be a whole number, not "1.5".');
     expect(() => bind(r!, { n: '1', on: '31/01/2024' })).toThrow(':on must be a date like 2024-01-31');
+    const [x] = parseRecipes('-- recipe: X\n-- param: amount numeric\nSELECT :amount');
+    expect(bind(x!, { amount: '1.5e3' }).values).toEqual(['1.5e3']);
+    expect(() => bind(x!, { amount: '1e' })).toThrow(':amount must be a number');
   });
 });
 
@@ -177,6 +192,7 @@ describe('Finder terminal output', () => {
       { values: { id: 3, email: 'cara@example.com' }, key: '3', claimedBy: { id: '9', table: 'public.customers', key: '3', claimedBy: 'priya', recipe: null, note: null, claimedAt: '2026-01-01T10:00:00.000Z', expiresAt: '2099-01-01T12:00:00.000Z', expired: false } },
     ],
     matches: 5,
+    moreMatches: false,
     claimed: 1,
     claim: { table: 'public.customers', keyColumn: 'id', column: 'id' },
     ms: 12,
@@ -198,6 +214,14 @@ describe('Finder terminal output', () => {
     expect(out).toMatch(/│ 2  │ bob@example.com +│ ✔ yours +│/);
     expect(out).toContain('✔ Claimed customers 2 · claim #10');
     expect(out).toContain('→ when you are done: propmaster claims release 10');
+    expect(out).not.toContain('you asked for');
+    expect(formatFindResult(result, [mine], { colors, width: 80, requested: 3 })).toContain('! Only 1 of the 3 rows you asked for were free.');
+  });
+
+  it('says "1000+ matches" when counting stopped', () => {
+    const out = formatFindResult({ ...result, matches: 1000, moreMatches: true }, [], { colors, width: 80 });
+    expect(out).toContain('1000+ matches');
+    expect(out).toContain('…and many more');
   });
 
   it('says when nothing matches', () => {

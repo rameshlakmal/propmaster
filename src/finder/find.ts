@@ -29,8 +29,10 @@ export interface FindResult {
   params: Record<string, string>;
   columns: string[];
   rows: FoundRow[];
-  /** All rows the recipe matched, claimed ones included. */
+  /** All rows the recipe matched, claimed ones included; when `moreMatches`, counting stopped here. */
   matches: number;
+  /** True when there are more than MATCH_COUNT_LIMIT matches: counting all of them could take long. */
+  moreMatches: boolean;
   /** How many of those someone holds right now. */
   claimed: number;
   claim: ClaimTarget | null;
@@ -44,6 +46,12 @@ export interface FindOptions {
   /** Statement timeout (default '30s'). */
   timeout?: string;
 }
+
+/**
+ * Matches are counted up to this many. An exact count reads every matching row, which on a big table
+ * turns a 2 ms query into seconds; "1000+ matches" is all a tester needs to know.
+ */
+export const MATCH_COUNT_LIMIT = 1000;
 
 const where = (recipe: Recipe) => `"${recipe.name}" (${recipe.file}, line ${recipe.line})`;
 
@@ -60,6 +68,15 @@ export function explainRecipeError(err: unknown, recipe: Recipe, timeout: string
       return new UserError(`${where(recipe)}: ${e.message}.`, 'Check the parameter values (-p name=value).');
     default:
       return e.code && e.message ? new UserError(`${where(recipe)} failed: ${e.message}.`) : err;
+  }
+}
+
+/** Two result columns with the same name can't be told apart (in a row, or as the claim key). */
+function checkColumns(recipe: Recipe, columns: string[]): void {
+  const twice = [...new Set(columns.filter((c, i) => columns.indexOf(c) !== i))];
+  if (twice.length) {
+    throw new UserError(`${where(recipe)} returns ${twice.length === 1 ? 'two columns' : 'columns'} named ${twice.map((c) => `"${c}"`).join(', ')}.`,
+      `Give each column its own name, e.g. SELECT c.id, o.id AS order_id`);
   }
 }
 
@@ -104,11 +121,15 @@ export async function find(db: Db, recipe: Recipe, options: FindOptions = {}): P
       // The result's columns without running it (LIMIT 0), to check the claim column first.
       const shape = await db.query({ text: `SELECT * FROM (${sql}\n) r LIMIT 0`, values });
       const columns = shape.fields.map((f) => f.name);
+      checkColumns(recipe, columns);
       const target = await claimTarget(db, recipe, columns);
       const held = target ? await claims.activeKeys(db, target.table) : new Map<string, claims.ClaimRow>();
 
-      // The window counts see every match. row_number keeps the recipe's own ORDER BY within the unclaimed
-      // rows, which come first; claimed rows are only shown, marked, when there's room.
+      // Only the first rows are read: enough to count up to the limit even if every held row is among
+      // them, plus one to tell "exactly the limit" from "more". The window counts see those rows;
+      // row_number keeps the recipe's own ORDER BY within the unclaimed rows, which come first, and
+      // claimed rows are only shown, marked, when there's room.
+      const window = MATCH_COUNT_LIMIT + held.size + 1;
       const key = target ? `r.${quoteIdent(target.column)}::text` : 'NULL::text';
       const { rows } = await db.query<Row>({
         text: `
@@ -117,8 +138,8 @@ export async function find(db: Db, recipe: Recipe, options: FindOptions = {}): P
               FROM (
                 SELECT r.*, ${key} AS __pm_key, coalesce(${key} = ANY ($${values.length + 1}::text[]), false) AS __pm_held,
                        row_number() OVER () AS __pm_n
-                  FROM (${sql}
-                  ) r
+                  FROM (SELECT * FROM (${sql}
+                  ) q LIMIT ${window}) r
               ) x
           ) y
           ORDER BY y.__pm_held, y.__pm_n
@@ -128,6 +149,7 @@ export async function find(db: Db, recipe: Recipe, options: FindOptions = {}): P
       });
 
       const first = rows[0];
+      const counted = first ? Number(first.__pm_matches) : 0;
       return {
         recipe: { id: recipe.id, name: recipe.name, file: recipe.file, line: recipe.line },
         params,
@@ -137,7 +159,8 @@ export async function find(db: Db, recipe: Recipe, options: FindOptions = {}): P
           key: (__pm_key as string | null) ?? null,
           claimedBy: __pm_held ? held.get(__pm_key as string) ?? null : null,
         })),
-        matches: first ? Number(first.__pm_matches) : 0,
+        matches: counted === window ? MATCH_COUNT_LIMIT : counted,
+        moreMatches: counted === window,
         claimed: first ? Number(first.__pm_claimed) : 0,
         claim: target,
         ms: Math.round(performance.now() - started),
@@ -167,7 +190,7 @@ export async function claimFound(db: Db, result: FindResult, opts: ClaimOptions)
   const free = result.rows.filter((r) => !r.claimedBy && r.key !== null).map((r) => r.key!);
   const count = opts.count ?? 1;
   if (free.length === 0) {
-    throw new UserError(result.matches === 0 ? 'Nothing to claim: the recipe found no rows.' : `Nothing to claim: all ${result.matches} matching rows are claimed by others.`,
+    throw new UserError(result.matches === 0 ? 'Nothing to claim: the recipe found no rows.' : `Nothing to claim: all ${result.matches}${result.moreMatches ? '+' : ''} matching rows are claimed by others.`,
       result.matches === 0 ? 'Change the parameters, or create the data you need.' : 'See who holds them: propmaster claims');
   }
   const got = await claims.claim(db, { table: result.claim.table, keys: free, count, by: opts.by, recipe: result.recipe.name, note: opts.note, seconds: opts.seconds });
@@ -208,7 +231,9 @@ export async function checkRecipes(db: Db, recipes: Recipe[], options: { timeout
         await readOnly(db, timeout, async () => {
           const { sql, values } = bindNulls(recipe);
           const shape = await db.query({ text: `SELECT * FROM (${sql}\n) r LIMIT 0`, values });
-          await claimTarget(db, recipe, shape.fields.map((f) => f.name));
+          const columns = shape.fields.map((f) => f.name);
+          checkColumns(recipe, columns);
+          await claimTarget(db, recipe, columns);
           await db.query({ text: `EXPLAIN ${sql}`, values });
         });
         results.push({ recipe: info, status: 'ok', how: 'explain', matches: null, ms: Math.round(performance.now() - started) });

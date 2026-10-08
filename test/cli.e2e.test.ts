@@ -203,7 +203,19 @@ describe('propmaster CLI', () => {
     expect(claims.out).toMatch(/customers 1 +│ ana \(you\)/);
     expect(claims.out).toContain('TC-7');
     expect((await cli(['claims', 'release', '--mine', '--as', 'ben'])).out).toContain('✔ Released 2 claims held by ben');
-    expect((await cli(['claims', 'release', data.claims[0]!.id])).out).toContain(`✔ Released claim #${data.claims[0]!.id} · customers 1 · held by ana`);
+    const notMine = await cli(['claims', 'release', data.claims[0]!.id, '--as', 'ben']);
+    expect(notMine.code).toBe(1);
+    expect(notMine.err).toContain(`Claim #${data.claims[0]!.id} (customers 1) is ana's, not yours.`);
+    expect(notMine.err).toContain('add --force');
+    expect((await cli(['claims', 'release', data.claims[0]!.id, '--as', 'ana'])).out).toContain(`✔ Released claim #${data.claims[0]!.id} · customers 1 · held by ana`);
+
+    const few = await cli(['find', ...recipes, 'never ordered', '--claim', '5', '--as', 'dee', '--json']);
+    expect(JSON.parse(few.out)).toMatchObject({ requested: 5, matches: 3, moreMatches: false });
+    expect((JSON.parse(few.out) as { claims: unknown[] }).claims).toHaveLength(3);
+    const failed = await cli(['find', ...recipes, 'low stock', '-p', 'max_stock=many', '--json']);
+    expect(failed.code).toBe(1);
+    expect(JSON.parse(failed.out)).toEqual({ error: ':max_stock must be a whole number, not "many".', hint: null });
+    await cli(['claims', 'release', '--mine', '--as', 'dee']);
 
     expect((await cli(['find', ...recipes, 'customer'])).err).toContain('2 recipes match "customer"');
     expect((await cli(['find', ...recipes, 'low stock', '-p', 'max_stock=many'])).err).toContain(':max_stock must be a whole number, not "many".');

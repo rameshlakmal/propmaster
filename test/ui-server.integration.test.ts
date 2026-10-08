@@ -227,6 +227,23 @@ describe('finding data through the web app', () => {
     expect((await call('GET', '/api/claims')).data.claims).toEqual([]);
   });
 
+  it("claims under a saved name, and releases another tester's claim only when forced", async () => {
+    const fallback = (await call('GET', '/api/claimer')).data.fallback;
+    expect((await call('PUT', '/api/claimer', { name: '  ana ' })).data).toEqual({ me: 'ana' });
+    expect((await call('GET', '/api/claimer')).data).toEqual({ me: 'ana', saved: 'ana', fallback });
+    const anas = (await call('POST', '/api/find/claim', { recipe: 'product-in-a-price-range' })).data.claims[0];
+    expect(anas.claimedBy).toBe('ana');
+
+    await call('PUT', '/api/claimer', { name: 'ben' });
+    const refused = await call('POST', `/api/claims/${anas.id}/release`);
+    expect(refused.data.error.message).toBe(`Claim #${anas.id} (products ${anas.key}) is ana's, not yours.`);
+    expect((await call('POST', `/api/claims/${anas.id}/extend`, { duration: '1h' })).status).toBe(400);
+    expect((await call('POST', `/api/claims/${anas.id}/release`, { force: true })).data.released).toHaveLength(1);
+
+    expect((await call('PUT', '/api/claimer', { name: '' })).data).toEqual({ me: fallback });
+    expect((await call('PUT', '/api/claimer', { name: 7 })).status).toBe(400);
+  });
+
   it('checks every recipe', async () => {
     const { results } = (await call('POST', '/api/recipes/check')).data;
     expect(results).toHaveLength(6);
