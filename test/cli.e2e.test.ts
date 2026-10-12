@@ -42,7 +42,8 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-describe('propmaster CLI', () => {
+// Each test starts the CLI many times (~1.5 s each), so the default 20 s is too tight on a slow machine.
+describe('propmaster CLI', { timeout: 60_000 }, () => {
   it('records a checkout from install to export, then uninstalls', async () => {
     expect((await cli(['install'])).out).toContain(' ✔ Recorder installed · watching 6 tables (6 new)');
     expect((await cli(['record', 'start', 'CLI checkout'])).out).toMatch(/ ● REC {2}Session #\d+ · CLI checkout +6 tables watched/);
@@ -91,7 +92,7 @@ describe('propmaster CLI', () => {
 
     expect((await cli(['uninstall'])).out).toContain('Cancelled. Nothing was removed.'); // no TTY, no --yes
     expect((await cli(['uninstall', '--yes'])).out).toContain(' ✔ Propmaster removed');
-  }, 60_000); // about 17 CLI runs of ~1.5 s each
+  });
 
   it('records in snapshot mode as a read-only user', async () => {
     await resetDatabase(db);

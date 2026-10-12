@@ -4,6 +4,10 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-13
+
+Tool 2, the **Test Data Finder**, and the **web app**.
+
 ### Added
 
 - **Tool 2: Test Data Finder.** Recipes are named, tagged SQL queries in `.sql` files (`-- recipe:`, `-- tags:`, `-- param:`, `-- claim:` header lines) that find test data in a given state. `propmaster find` lists them; `propmaster find <words> -p name=value` runs one. Parameters are typed and sent as bind values. Recipes run in a read-only transaction with a time limit. Example recipes: `demo/recipes/shop.sql`. Blank lines may separate header lines; a recipe with two statements, or two result columns of the same name, gets a clear message. Matches are counted up to 1,000 ("1000+ matches") so big results stay fast.
@@ -70,4 +74,6 @@ The first release: **Tool 1, the DB Change Recorder**.
 - **Demo:** a small e-commerce database in Docker (`npm run db:up`) and the whole flow in one command: `docker compose run --rm demo` (only Docker needed) or `npm run demo`.
 - Tests on PostgreSQL 13 to 17 in CI, a written test plan, and a benchmark (`npm run bench`).
 
+[Unreleased]: https://github.com/rameshlakmal/propmaster/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rameshlakmal/propmaster/releases/tag/v0.2.0
 [0.1.0]: https://github.com/rameshlakmal/propmaster/releases/tag/v0.1.0

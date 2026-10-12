@@ -92,17 +92,17 @@ Results for the release are recorded in the README. On Docker Desktop, round-tri
 
 ## 6. Exploratory checklist (manual, before a release)
 
-Results for v0.1.0. ✅ = done; ⬜ = still to do by hand.
+Results for v0.2.0. ✅ = done; ⬜ = still to do by hand; ➖ = not tested on purpose.
 
 - ✅ HTML report in Chromium: search box and operation buttons filter correctly (driven through the DevTools protocol).
-- ⬜ HTML report in Firefox and Edge.
+- ✅ HTML report in Firefox and Edge (checked by hand).
 - ✅ HTML report follows the system's dark mode, and has no sideways scrolling at 1200 px or at phone width (390 px), even with 2 KB text and large JSON values.
 - ✅ Keyboard only: Tab reaches the search box, the buttons and each change; Space and Enter toggle the buttons; Enter opens and closes a change; focus has a visible outline; long values scroll in their own focusable box.
-- ⬜ `record export --open` on macOS and Linux (✅ Windows).
+- ➖ `record export --open` on macOS and Linux: not tested; no machine to test on (✅ Windows).
 - ✅ Killing the CLI during `record step --snapshot`, at five moments from start-up to file writing, leaves a usable session. Now an automated test (`survives being killed in the middle of a snapshot step`); snapshot files are written atomically.
 - ✅ Very long values keep the timeline to one short line per change, and appear in full in the HTML report (automated: `very long values`).
 - ✅ The Markdown export renders as tables on GitHub (checked with GitHub's Markdown renderer).
-- ⬜ The Markdown export pasted into a Jira ticket.
+- ✅ The Markdown export pasted into a Jira ticket (checked by hand).
 - ✅ Web app walkthrough in headless Edge, driven like a tester (22 checks): start a recording from the form, add steps with Enter, see a real EverShop change appear live, stop, open the session, expand a change, search, run rules, run the access check, light and dark mode, phone width, and no console errors from the app.
 - ✅ Floating window walkthrough in headless Edge (24 checks): upgrade an older recorder from Setup, pause, resume and flag on the page, pop out, add a step from the floating window (the page follows), see a real order arrive in its live feed, pause there (setup while paused is not recorded), resume, flag with a note, stop (the page shows the stopped view with the markers), close, and no console errors.
 - ✅ Auto steps and the new Changes layout in headless Edge (14 checks): start with **Name steps for me**, two demo-shop actions become two named steps, a typed name goes to the next action, the session shows labelled fields, unquoted text, readable times and old → new, auto steps are labelled, no sideways page scrolling at phone width, no console errors.
