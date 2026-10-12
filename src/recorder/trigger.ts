@@ -209,7 +209,7 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
      ORDER BY seq`, [session.id]);
 
   const { rows: changes } = await db.query<Change & { stepId: string }>(`
-    SELECT id::int AS id, step_id::text AS "stepId",
+    SELECT id::float8 AS id, step_id::text AS "stepId",  -- float8: exact as a JS number, and no int4 overflow past 2^31 ids
            table_schema AS "tableSchema", table_name AS "tableName", op,
            row_key AS "rowKey", old_values AS "oldValues", new_values AS "newValues",
            changed_at AS "changedAt", txid::text AS txid, db_user AS "dbUser", app_name AS "appName",
@@ -245,7 +245,7 @@ export async function getRecording(db: Db, sessionId?: string): Promise<Recordin
   if (!autoSplitMs) return rec;
   const hasNames = (await db.query<{ ok: boolean }>("SELECT to_regclass('_propmaster.step_names') IS NOT NULL AS ok")).rows[0]!.ok;
   const { rows: names } = hasNames
-    ? await db.query<{ id: number; name: string }>('SELECT first_change_id::int AS id, name FROM _propmaster.step_names WHERE session_id = $1', [session.id])
+    ? await db.query<{ id: number; name: string }>('SELECT first_change_id::float8 AS id, name FROM _propmaster.step_names WHERE session_id = $1', [session.id])
     : { rows: [] };
   return splitSteps(rec, autoSplitMs, new Map(names.map((n) => [n.id, n.name])));
 }

@@ -1,13 +1,24 @@
 import { isRawNumber, parseJsonExact } from '../core/json.js';
 import type { Change, Row } from './types.js';
 
+const CONTROL_NAMES: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
+/**
+ * Shows control characters as escapes. A value printed raw could hold a line break, a carriage return
+ * that overwrites the line, or a terminal escape sequence (colours, links, clipboard writes).
+ */
+export function escapeControl(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => CONTROL_NAMES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
 /** Formats a value the way it would be written in SQL: 'text', 84.50, NULL. Pass max to shorten long values. */
 export function formatValue(value: unknown, max = Infinity): string {
   if (value === null || value === undefined) return 'NULL';
   if (isRawNumber(value)) return value.rawJSON;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
 
-  const text = typeof value === 'string' ? value.replace(/\r?\n/g, '\\n') : JSON.stringify(value);
+  const text = typeof value === 'string' ? escapeControl(value) : JSON.stringify(value);
   const short = text.length > max ? `${text.slice(0, max - 1)}…` : text;
   return typeof value === 'string' ? `'${short}'` : short;
 }

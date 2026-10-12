@@ -9,7 +9,7 @@
 // Rows are found by primary key only. Rows others point at (dependents) and rows others have claimed block
 // the clean unless the tester says otherwise. Everything runs in one transaction, and what is about to be
 // changed is written to a backup file before it commits.
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Db } from '../core/db.js';
@@ -20,7 +20,7 @@ import { quoteIdent } from '../recorder/export/sql.js';
 import type { Recording, Row } from '../recorder/types.js';
 import * as runs from './runs.js';
 import { asText } from './seed.js';
-import { column, inColumnOrder, loadSchema, qualified, referencing, shortName, type ForeignKey, type Schema, type Table } from './schema.js';
+import { column, inColumnOrder, loadSchema, qualified, referencing, shortName, type Column, type ForeignKey, type Schema, type Table } from './schema.js';
 
 /** One change to undo. INSERT is undone by deleting, UPDATE by setting the old values, DELETE by inserting. */
 export interface UndoChange {
@@ -112,12 +112,34 @@ export function backupDir(): string {
 }
 
 const rowKey = (table: string, key: Row) => `${table}|${JSON.stringify(Object.keys(key).sort().map((k) => [k, asText(key[k])]))}`;
-const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const pick = (row: Row, columns: string[]): Row => Object.fromEntries(columns.map((c) => [c, row[c]]));
 
+const ZONED = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$/;
+
+/**
+ * The same moment, whichever time zone wrote it: the recorder saw the app's session (+05:30), and
+ * Propmaster reads in its own (+00:00), so the same timestamptz can come back as different text.
+ */
+function moment(text: string): string | null {
+  const m = ZONED.exec(text);
+  if (!m) return null;
+  const zone = m[3] === 'Z' ? 'Z' : m[3]!.length === 3 ? `${m[3]}:00` : m[3]!.replace(/^([+-]\d{2})(\d{2})$/, '$1:$2');
+  const seconds = Date.parse(`${m[1]}${zone}`) / 1000;
+  return Number.isNaN(seconds) ? null : `${seconds}${(m[2] ?? '.').padEnd(7, '0')}`;
+}
+
+function same(a: unknown, b: unknown, type?: Column): boolean {
+  if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) return true;
+  if (type?.baseType === 'timestamptz' && typeof a === 'string' && typeof b === 'string') {
+    const x = moment(a);
+    return x !== null && x === moment(b);
+  }
+  return false;
+}
+
 /** Columns whose current value differs from the expected one. */
-function differences(expected: Row, current: Row): Diff[] {
-  return Object.keys(expected).filter((c) => !same(expected[c], current[c])).map((c) => ({ column: c, from: expected[c], to: current[c] }));
+function differences(table: Table, expected: Row, current: Row): Diff[] {
+  return Object.keys(expected).filter((c) => !same(expected[c], current[c], column(table, c))).map((c) => ({ column: c, from: expected[c], to: current[c] }));
 }
 
 // ---------- reading rows ----------
@@ -178,11 +200,11 @@ async function planUndo(db: Db, schema: Schema, changes: UndoChange[], lock: boo
       const current = await reader.get(table, ch.key);
       if (!current) {
         skipped.push({ table: ch.table, key: ch.key, reason: 'gone', detail: 'already deleted' });
-      } else if (ch.anyState || differences(ch.new ?? {}, current).length === 0) {
-        actions.push({ op: 'delete', table: ch.table, key: ch.key, row: current, why: ch.anyState ? 'seeded' : 'inserted', changed: differences(ch.new ?? {}, current) });
+      } else if (ch.anyState || differences(table, ch.new ?? {}, current).length === 0) {
+        actions.push({ op: 'delete', table: ch.table, key: ch.key, row: current, why: ch.anyState ? 'seeded' : 'inserted', changed: differences(table, ch.new ?? {}, current) });
         reader.set(table, ch.key, null);
       } else {
-        skipped.push({ table: ch.table, key: ch.key, reason: 'conflict', detail: `changed since: ${describeDiffs(differences(ch.new ?? {}, current))}` });
+        skipped.push({ table: ch.table, key: ch.key, reason: 'conflict', detail: `changed since: ${describeDiffs(differences(table, ch.new ?? {}, current))}` });
       }
     } else if (ch.op === 'UPDATE') {
       const after = { ...ch.key, ...pick(ch.new ?? {}, table.primaryKey.filter((c) => ch.new && c in ch.new)) };
@@ -190,8 +212,8 @@ async function planUndo(db: Db, schema: Schema, changes: UndoChange[], lock: boo
       const expected = ch.new ?? {};
       if (!current) {
         skipped.push({ table: ch.table, key: after, reason: 'conflict', detail: 'the row no longer exists' });
-      } else if (differences(expected, current).length) {
-        skipped.push({ table: ch.table, key: after, reason: 'conflict', detail: `changed again since: ${describeDiffs(differences(expected, current))}` });
+      } else if (differences(table, expected, current).length) {
+        skipped.push({ table: ch.table, key: after, reason: 'conflict', detail: `changed again since: ${describeDiffs(differences(table, expected, current))}` });
       } else {
         const set = ch.old ?? {};
         actions.push({ op: 'update', table: ch.table, key: after, set, current: pick(current, Object.keys(set)), why: 'updated' });
@@ -224,6 +246,7 @@ export function describeDiffs(diffs: Diff[]): string {
 async function dependents(db: Db, schema: Schema, actions: Action[], lock: boolean): Promise<{ found: Action[]; unkeyed: CleanPlan['unkeyedDependents'] }> {
   const planned = new Set(actions.filter((a) => a.op !== 'insert').map((a) => rowKey(a.table, a.key)));
   const found: Action[] = [];
+  const byKey = new Map<string, { depth: number }>();
   const unkeyed = new Map<string, { table: string; via: string; count: number }>();
   let frontier = new Map<string, Row[]>();
   for (const a of actions) if (a.op === 'delete') frontier.set(a.table, [...(frontier.get(a.table) ?? []), a.row]);
@@ -244,9 +267,22 @@ async function dependents(db: Db, schema: Schema, actions: Action[], lock: boole
           }
           const key = pick(row, child.primaryKey);
           const k = rowKey(child.key, key);
+          const seen = byKey.get(k);
+          if (seen) {
+            // Reached again by a longer path (an order item points at a seeded product, and at an order
+            // that points at a seeded customer): it must go before the order, so it moves deeper, and
+            // so does everything found below it.
+            if (seen.depth < depth) {
+              seen.depth = depth;
+              next.set(child.key, [...(next.get(child.key) ?? []), row]);
+            }
+            continue;
+          }
           if (planned.has(k)) continue;
           planned.add(k);
-          found.push({ op: 'delete', table: child.key, key, row, why: 'dependent', via, depth });
+          const action = { op: 'delete' as const, table: child.key, key, row, why: 'dependent' as const, via, depth };
+          byKey.set(k, action);
+          found.push(action);
           next.set(child.key, [...(next.get(child.key) ?? []), row]);
           if (found.length + actions.length > MAX_ROWS) {
             throw new UserError(`Cleaning would touch more than ${MAX_ROWS} rows, counting rows that point at them.`, 'That is more than one test\'s data: check the run or session.');
@@ -263,8 +299,9 @@ async function dependents(db: Db, schema: Schema, actions: Action[], lock: boole
 
 /** Rows of `child` whose foreign key points at one of `parents`. */
 async function childRows(db: Db, child: Table, fk: ForeignKey, parent: Table, parents: Row[], lock: boolean): Promise<Row[]> {
-  const keys = parents.map((p) => fk.refColumns.map((c) => asText(p[c])));
-  if (keys.some((k) => k.some((v) => v === null))) return [];
+  // A parent with NULL in the referenced column has no children through it; the others still do.
+  const keys = parents.map((p) => fk.refColumns.map((c) => asText(p[c]))).filter((k) => k.every((v) => v !== null));
+  if (!keys.length) return [];
   const pairs = fk.columns.map((c, i) => `x.${quoteIdent(c)} = (r ->> ${i})::${column(parent, fk.refColumns[i]!)!.type}`).join(' AND ');
   const { rows } = await db.query<{ row: Row }>(`
     SELECT to_jsonb(x.*) AS row FROM ${qualified(child)} x
@@ -293,7 +330,7 @@ async function claimedRows(db: Db, schema: Schema, actions: Action[], by: string
 
 // ---------- targets ----------
 
-async function changesFor(db: Db, target: Target, identity: string): Promise<{ title: string; changes: UndoChange[] }> {
+async function changesFor(db: Db, target: Target, identity: string): Promise<{ title: string; changes: UndoChange[]; restoresRuns?: string[] }> {
   if (target.kind === 'run') {
     if (!target.runIds.length) throw new UserError('Which run?', 'Give a run id (see `propmaster runs`).');
     const changes: UndoChange[] = [];
@@ -324,7 +361,7 @@ async function changesFor(db: Db, target: Target, identity: string): Promise<{ t
   if (backup.database !== identity) {
     throw new UserError(`This backup is from ${backup.database}, not ${identity}.`, 'Restore it with a connection to the database it came from.');
   }
-  return { title: `Backup of ${backup.title}`, changes: [...backup.changes].reverse() };
+  return { title: `Backup of ${backup.title}`, changes: [...backup.changes].reverse(), restoresRuns: backup.runIds ?? [] };
 }
 
 /**
@@ -340,6 +377,7 @@ export async function clean(db: Db, targets: Target | Target[], options: CleanOp
   const title = parts.map((p) => p.title).join(' + ');
   const runIds = list.flatMap((t) => (t.kind === 'run' ? t.runIds : []));
 
+  let backup: string | null = null;
   // A preview reads a consistent snapshot and changes nothing; applying locks every row it will touch.
   await db.query(options.apply ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
@@ -359,12 +397,15 @@ export async function clean(db: Db, targets: Target | Target[], options: CleanOp
     refuseIfBlocked(plan, options);
     const done = await execute(db, schema, actions);
     const releasedClaims = await releaseClaimsOnDeleted(db, schema, done);
-    const backup = done.length ? await writeBackup({ title, database: options.identity, by: options.by, changes: done }) : null;
     if (runIds.length) await runs.markCleaned(db, runIds, options.by);
+    await runs.markRestored(db, parts.flatMap((p) => p.restoresRuns ?? []));
+    backup = done.length ? await writeBackup({ title, database: options.identity, by: options.by, changes: done, runIds }) : null;
     await db.query('COMMIT');
     return { plan, applied: true, backup, releasedClaims };
   } catch (err) {
     await db.query('ROLLBACK').catch(() => undefined);
+    // The commit failed (a deferred constraint, say): nothing changed, so a backup of it would mislead.
+    if (backup) await rm(backup, { force: true }).catch(() => undefined);
     throw explainCleanError(err);
   }
 }
@@ -400,10 +441,13 @@ async function execute(db: Db, schema: Schema, actions: Action[]): Promise<UndoC
       if (!rows[0]) throw changedMeanwhile(a);
       done.push({ table: a.table, op: 'DELETE', key: a.key, old: rows[0].row, new: null });
     } else if (a.op === 'update') {
-      const names = Object.keys(a.set);
-      const sets = names.map((c, i) => `${quoteIdent(c)} = $${i + 1}::${column(table, c)!.type}`).join(', ');
-      const m = keyMatch(table, a.key, names.length);
-      const { rows } = await db.query<{ row: Row }>(`UPDATE ${qualified(table)} x SET ${sets} WHERE ${m.sql} RETURNING to_jsonb(x.*) AS row`, [...names.map((c) => asText(a.set[c])), ...m.values]);
+      // Values go through jsonb_populate_record, as for inserts: arrays, composites and json then turn back
+      // into their column types (a text[] written as text would be '["a","b"]', which Postgres refuses).
+      const sets = Object.keys(a.set).map((c) => `${quoteIdent(c)} = r.${quoteIdent(c)}`).join(', ');
+      const m = keyMatch(table, a.key, 1);
+      const { rows } = await db.query<{ row: Row }>(
+        `UPDATE ${qualified(table)} x SET ${sets} FROM jsonb_populate_record(NULL::${qualified(table)}, $1::jsonb) r WHERE ${m.sql} RETURNING to_jsonb(x.*) AS row`,
+        [JSON.stringify(a.set), ...m.values]);
       if (!rows[0]) throw changedMeanwhile(a);
       done.push({ table: a.table, op: 'UPDATE', key: a.key, old: a.current, new: a.set });
     } else {
@@ -463,9 +507,11 @@ export interface Backup {
   createdAt: string;
   /** What the clean did, in order. A restore undoes them newest first. */
   changes: UndoChange[];
+  /** Seed runs the clean marked as cleaned: restoring gives them their data back. */
+  runIds?: string[];
 }
 
-async function writeBackup(b: Pick<Backup, 'title' | 'database' | 'by' | 'changes'>): Promise<string> {
+async function writeBackup(b: Pick<Backup, 'title' | 'database' | 'by' | 'changes' | 'runIds'>): Promise<string> {
   const dir = backupDir();
   await mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');

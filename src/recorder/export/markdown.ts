@@ -6,7 +6,10 @@ const MAX_VALUE_LENGTH = 80;
 
 /** Escapes text for a Markdown table cell. */
 function cell(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/`/g, '\\`');
+  // & first, so "&lt;" in the data shows as written instead of turning into "<". A line break would end
+  // the table row.
+  return text.replace(/&/g, '&amp;').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/`/g, '\\`')
+    .replace(/\r?\n|\r/g, ' ');
 }
 
 /** Columns holding JSON: a table cell can't show it over several lines, so it goes in a code block below. */
@@ -84,7 +87,7 @@ const MARKER_LABEL = { pause: '‖ **Paused**', resume: '● **Resumed**', flag:
 export function toMarkdown(rec: Recording, { masked, hidden = 0 }: ExportOptions): string {
   const s = summarize(rec);
   const out: string[] = [
-    `# Propmaster recording: ${rec.name}`,
+    `# Propmaster recording: ${cell(rec.name)}`,
     '',
     '| | |',
     '| --- | --- |',

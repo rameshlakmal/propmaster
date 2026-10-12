@@ -143,7 +143,7 @@ function parseParam(text: string, where: string): Param {
   if (!(PARAM_TYPES as readonly string[]).includes(type)) {
     throw new UserError(`${where}: parameter :${m[1]} has an unknown type "${m[2]}".`, `Use one of: ${PARAM_TYPES.join(', ')}.`);
   }
-  const param: Param = { name: m[1]!, type: type as ParamType };
+  const param: Param = { name: m[1]!.toLowerCase(), type: type as ParamType }; // placeholders are matched in lower case too
   if (m[3] !== undefined) {
     param.default = unquote(m[3]);
     checkValue(param, param.default, where);

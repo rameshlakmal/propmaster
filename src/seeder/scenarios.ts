@@ -36,6 +36,8 @@ export interface RowSpec {
   via?: string;
   /** Where it is in the file, for messages. */
   line: number;
+  /** Numbers as written (0771234567, 1.10), for keys that turn out to be columns. */
+  exact?: Record<string, string>;
 }
 
 export interface Scenario {
@@ -162,9 +164,21 @@ function rowSpecs(table: string, node: YamlNode | null, line: number, at: (n: Ya
     spec.fields[key] = (isMap(value) && !isRef(plain)) || (isSeq(value) && value.items.some((i) => isMap(i)))
       ? new Nested(value, at(value), at)
       : plain;
+    const exact = exactNumber(value);
+    if (exact !== undefined) (spec.exact ??= {})[key] = exact;
   }
   if (spec.as && spec.count !== 1) throw new UserError(`${file}, line ${line}: $as names one row, but this is ${spec.count} rows.`, 'Give each row its own $as, or drop $count.');
   return spec.count === 0 ? [] : [spec];
+}
+
+/**
+ * A number exactly as written. YAML reads 0771234567 as 771234567, 1.10 as 1.1 and 9007199254740993 as
+ * …992; the database should get what the scenario says, and casts the text to the column's type itself.
+ */
+function exactNumber(node: YamlNode | null): string | undefined {
+  if (!isScalar(node) || typeof node.value !== 'number' && typeof node.value !== 'bigint') return undefined;
+  const source = (node as { source?: string }).source?.trim();
+  return source && /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(source) ? source : undefined;
 }
 
 /** { $ref: name }: the key of the row named `name` with $as. */

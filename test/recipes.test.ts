@@ -45,6 +45,11 @@ describe('parseRecipes', () => {
     });
   });
 
+  it('matches parameter names in any case, like placeholders', () => {
+    const [r] = parseRecipes('-- recipe: Since\n-- param: Since date\nSELECT 1 WHERE now() > :SINCE');
+    expect(r!.params).toEqual([{ name: 'since', type: 'date' }]);
+  });
+
   it('splits several recipes and accepts quoted defaults and schema-qualified claims', () => {
     const recipes = parseRecipes([
       '-- recipe: A',

@@ -1,4 +1,5 @@
 // Saved database connections for the web app, so a tester sets a connection up once.
+import { randomBytes } from 'node:crypto';
 // Stored in ~/.propmaster/ui.json (or PROPMASTER_UI_CONFIG). Connection strings include passwords:
 // fine for local test databases, which is all Propmaster connects to.
 import { existsSync } from 'node:fs';
@@ -6,6 +7,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { UserError } from '../core/errors.js';
+import { describeDatabase } from '../core/db.js';
 import { assertNotProduction } from '../core/guard.js';
 
 export interface Profile {
@@ -47,8 +49,10 @@ export async function readConfig(): Promise<UiConfig> {
 async function writeConfig(config: UiConfig): Promise<void> {
   const path = configPath();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(`${path}.tmp`, JSON.stringify(config, null, 2), 'utf8');
-  await rename(`${path}.tmp`, path);
+  // A unique temporary name: two saves at once must not rename each other's file away.
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(tmp, JSON.stringify(config, null, 2), 'utf8');
+  await rename(tmp, path);
 }
 
 /** Adds or replaces a profile (by name) and makes it the active one. */
@@ -134,7 +138,8 @@ export function publicProfile(profile: Profile): Profile & { display: string } {
   try {
     const u = new URL(profile.url);
     if (u.password) u.password = '****';
-    display = `${u.hostname}:${u.port || '5432'}${u.pathname}`;
+    for (const key of [...u.searchParams.keys()]) if (/pass|secret|token|key/i.test(key)) u.searchParams.set(key, '****');
+    display = describeDatabase(profile.url);
     return { name: profile.name, url: u.toString(), rulesFile: profile.rulesFile, recipesPath: profile.recipesPath, scenariosPath: profile.scenariosPath, display };
   } catch {
     return { ...profile, display };

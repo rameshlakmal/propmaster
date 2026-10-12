@@ -46,25 +46,44 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[], everyMs?: nu
   const [loading, setLoading] = useState(true);
   const loadRef = useRef(load);
   loadRef.current = load;
+  // Only the latest request may set the data, so a slow older answer never overwrites a newer one.
+  const latest = useRef(0);
+  const inFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    const mine = ++latest.current;
+    inFlight.current = true;
     try {
       const result = await loadRef.current();
+      if (mine !== latest.current) return;
       setData(result);
       setError(null);
     } catch (err) {
+      if (mine !== latest.current) return;
       setError(toError(err));
     } finally {
-      setLoading(false);
+      if (mine === latest.current) {
+        inFlight.current = false;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     setLoading(true);
     void refresh();
-    if (!everyMs) return;
-    const timer = timers.setInterval(() => void refresh(), everyMs);
-    return () => timers.clearInterval(timer);
+    if (!everyMs) return () => { latest.current++; };
+    // A poll is skipped while the last one is still running, so slow answers don't pile up, and while
+    // this tab is in the background (each poll opens a database connection); it catches up on return.
+    const visible = () => timers !== window || !document.hidden;
+    const timer = timers.setInterval(() => { if (!inFlight.current && visible()) void refresh(); }, everyMs);
+    const onShow = () => { if (visible() && !inFlight.current) void refresh(); };
+    document.addEventListener('visibilitychange', onShow);
+    return () => {
+      timers.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onShow);
+      latest.current++;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, everyMs]);
 
@@ -84,9 +103,11 @@ export function useElapsed(since: string | null, timers: Window = window): strin
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+/** "13 Oct, 10:30", with the year when it isn't this year. */
 export function formatWhen(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const year = d.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined;
+  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', year, hour: '2-digit', minute: '2-digit' });
 }
 
 /** Follows the operating system's light or dark setting, live. */

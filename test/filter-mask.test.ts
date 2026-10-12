@@ -84,6 +84,16 @@ describe('masking', () => {
     expect(mask('password', null)).toEqual({ value: null, masked: false });
   });
 
+  it('masks inside JSON and finds e-mail addresses inside longer text', () => {
+    const mask = createMasker();
+    expect(mask('settings', { theme: 'dark', api_token: 'tok_123', owner: { email: 'dina@example.com' }, tags: ['a'] })).toEqual({
+      value: { theme: 'dark', api_token: MASK, owner: { email: 'd***@example.com' }, tags: ['a'] }, masked: true,
+    });
+    expect(mask('settings', '{"apiKey":"k","n":1}')).toEqual({ value: `{"apiKey":"${MASK}","n":1}`, masked: true });
+    expect(mask('note', 'Sent to dina@example.com, cc bob.s@shop.co.uk.')).toEqual({ value: 'Sent to d***@example.com, cc b***@shop.co.uk.', masked: true });
+    expect(mask('settings', { theme: 'dark' })).toEqual({ value: { theme: 'dark' }, masked: false });
+  });
+
   it('hides extra columns and can leave e-mails alone', () => {
     const mask = createMasker({ columns: ['Phone'], emails: false });
     expect(mask('phone', '+44 7700 900123').masked).toBe(true);

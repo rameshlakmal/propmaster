@@ -2,7 +2,7 @@ import { Badge, Box, Button, Card, Checkbox, Flex, Heading, Select, Switch, Tabl
 import { ArrowCounterClockwise, Broom, CheckCircle, FolderOpen, MagnifyingGlass, Plant, Stethoscope, Warning, XCircle } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
+import { CopyButton, EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
 import { formatWhen, toError, useLoad } from '../hooks';
 import type { ApiError, BackupInfo, CleanAction, CleanResult, Row, Run, Scenario, ScenarioCheck, ScenariosSource, SeedResult, SessionPage } from '../types';
 
@@ -51,7 +51,7 @@ function ScenarioList({ scenarios, selected, onSelect }: { scenarios: Scenario[]
 
 function SeededRows({ result }: { result: SeedResult }) {
   return (
-    <Table.Root variant="surface" size="1">
+    <Table.Root variant="surface" size="1" className="tall-table">
       <Table.Header>
         <Table.Row>
           <Table.ColumnHeaderCell width="40px">#</Table.ColumnHeaderCell>
@@ -198,7 +198,10 @@ function CleanPanel({ target, onDone, onClose, onRestore }: { target: CleanTarge
 
   useEffect(() => {
     setResult(null); setError(null); setIncludeDependents(false); setForce(false);
-    call(false).then(setResult, (err) => setError(toError(err)));
+    // Clicking another run before this preview arrives must not show this one's plan under the other's button.
+    let live = true;
+    call(false).then((r) => { if (live) setResult(r); }, (err) => { if (live) setError(toError(err)); });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
@@ -228,7 +231,7 @@ function CleanPanel({ target, onDone, onClose, onRestore }: { target: CleanTarge
       {plan && (
         <Flex direction="column" gap="3">
           {plan.actions.length === 0 ? <Text size="2" color="gray">Nothing to change.</Text> : (
-            <Table.Root variant="surface" size="1">
+            <Table.Root variant="surface" size="1" className="tall-table">
               <Table.Header>
                 <Table.Row>
                   <Table.ColumnHeaderCell width="100px">Action</Table.ColumnHeaderCell>
@@ -305,6 +308,7 @@ function CleanPanel({ target, onDone, onClose, onRestore }: { target: CleanTarge
               {result.backup && (
                 <Flex gap="3" align="center" wrap="wrap">
                   <Text size="1" color="gray" className="mono">Backup: {result.backup}</Text>
+                  <CopyButton text={result.backup} label="Copy the backup path" />
                   <Button size="1" variant="soft" onClick={() => onRestore(result.backup!)}><ArrowCounterClockwise /> Undo this…</Button>
                 </Flex>
               )}
@@ -383,7 +387,8 @@ function UndoSession({ activeProfile, preselected, onClean }: { activeProfile: s
   const list = useLoad(() => api<SessionPage>('GET', '/sessions?page=1&pageSize=50'), [activeProfile]);
   const stopped = (list.data?.sessions ?? []).filter((s) => s.stoppedAt && s.changeCount > 0);
   const [chosen, setChosen] = useState<string>(preselected ?? '');
-  useEffect(() => { if (!chosen && stopped[0]) setChosen(stopped[0].id); }, [stopped, chosen]);
+  // Falls back to the newest one when nothing (or a session that can't be undone) is chosen.
+  useEffect(() => { if (stopped[0] && !stopped.some((s) => s.id === chosen)) setChosen(stopped[0].id); }, [stopped, chosen]);
   const session = stopped.find((s) => s.id === chosen);
 
   return (
@@ -425,13 +430,14 @@ function Backups({ version, activeProfile, onRestore }: { version: number; activ
               <Table.Row key={b.file}>
                 <Table.Cell><Text size="2">{formatWhen(b.createdAt)}</Text></Table.Cell>
                 <Table.RowHeaderCell>{b.title}</Table.RowHeaderCell>
-                <Table.Cell><Text size="1" color="gray">{b.changes} rows</Text></Table.Cell>
+                <Table.Cell><Text size="1" color="gray">{b.changes} {b.changes === 1 ? 'row' : 'rows'}</Text></Table.Cell>
                 <Table.Cell><Flex justify="end"><Button size="1" variant="soft" onClick={() => onRestore(b.file)}><ArrowCounterClockwise /> Restore…</Button></Flex></Table.Cell>
               </Table.Row>
             ))}
           </Table.Body>
         </Table.Root>
       )}
+      {backups.length > 20 && <Text as="p" size="1" color="gray" mt="2">Showing the newest 20 of {backups.length}. Older ones are in the folder above: <span className="mono">propmaster restore &lt;file&gt;</span>.</Text>}
     </Card>
   );
 }
@@ -486,6 +492,7 @@ export function SeedPage({ activeProfile, session }: { activeProfile: string | n
           <Button variant="soft" color="gray" onClick={() => void check()} loading={busy === 'check'} disabled={scenarios.length === 0}><Stethoscope /> Check all scenarios</Button>
         </Flex>
         {source.data?.error && <Box mt="3"><ErrorCallout error={{ message: source.data.error }} /></Box>}
+        {source.error && <Box mt="3"><ErrorCallout error={source.error} /></Box>}
         {checks && (
           <Box mt="3">
             <Table.Root variant="surface" size="1">
@@ -505,7 +512,7 @@ export function SeedPage({ activeProfile, session }: { activeProfile: string | n
       </Card>
 
       {scenarios.length === 0 ? (
-        !source.loading && !source.data?.error && (
+        !source.loading && !source.data?.error && !source.error && (
           <Card size="3" mb="5">
             <EmptyState icon={<Plant size={36} />} title="Open a scenario folder">
               A scenario is a .yml file that lists the rows a test needs; Propmaster fills in the rest and links them. Try the demo: the demo/scenarios folder of Propmaster.

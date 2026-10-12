@@ -1,6 +1,6 @@
-import { Box, Button, Callout, Flex, Heading, Skeleton, Text } from '@radix-ui/themes';
-import { WarningCircle } from '@phosphor-icons/react';
-import type { ReactNode } from 'react';
+import { Box, Button, Callout, Flex, Heading, IconButton, Skeleton, Text, Tooltip } from '@radix-ui/themes';
+import { Check, Copy, WarningCircle } from '@phosphor-icons/react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { ApiError } from '../types';
 
 /** An error with the server's next-step hint underneath. */
@@ -64,4 +64,24 @@ export function PageHeader({ title, description, actions }: { title: string; des
 
 export function RetryButton({ onClick }: { onClick: () => void }) {
   return <Button variant="soft" onClick={onClick}>Try again</Button>;
+}
+
+/** Copies a command, path or id, and says so for a moment. */
+export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); } catch { /* clipboard blocked: the text is still on screen to select */ }
+  };
+  return (
+    <Tooltip content={copied ? 'Copied' : label}>
+      <IconButton type="button" size="1" variant="ghost" color={copied ? 'grass' : 'gray'} aria-label={copied ? 'Copied' : label} onClick={() => void copy()}>
+        {copied ? <Check /> : <Copy />}
+      </IconButton>
+    </Tooltip>
+  );
 }

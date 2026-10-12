@@ -104,7 +104,9 @@ export function generateValue(column: Column, ctx: GenerateContext): string {
 
   switch (column.category) {
     case 'N': return number(column, name, allowed, unique, ctx);
-    case 'S': return text(column, name, unique, ctx);
+    // Text in a several-column unique key (store_id, name) gets the token too: with the other columns
+    // fixed by the scenario, it's the only thing that can make a retry differ.
+    case 'S': return text(column, name, unique || table.uniques.some((u) => u.includes(column.name)), ctx);
     case 'B': return /^(is_)?(active|enabled|visible|published|verified|confirmed)$/.test(name) ? 'true' : 'false';
     case 'D': return dateTime(column);
     case 'A': return '{}';

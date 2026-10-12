@@ -48,6 +48,37 @@ function jsonLiteral(row: Row): string {
   return `${quoteLiteral(JSON.stringify(row))}::jsonb`;
 }
 
+const ZONED_TYPE = /with time zone$/;
+
+/**
+ * The WHERE condition for "a row holding these values". Plain values compare by jsonb containment, which
+ * for scalars is equality. Two kinds can't: containment would let ["a"] match ["a","b"] (arrays, json), so
+ * they compare as whole values; and a timestamptz turns into text in the session's TimeZone, so it is
+ * compared as a timestamp, whatever time zone the script runs in.
+ */
+function matchCondition(row: Row, columns: { name: string; type: string }[] | undefined): string {
+  const plain: Row = {};
+  const exact: string[] = [];
+  for (const [col, value] of Object.entries(row)) {
+    const type = columns?.find((c) => c.name === col)?.type ?? '';
+    if (value !== null && typeof value === 'object' && !JSON.isRawJSON(value)) {
+      exact.push(`to_jsonb(t.*) -> ${quoteLiteral(col)} = ${quoteLiteral(JSON.stringify(value))}::jsonb`);
+    } else if (typeof value === 'string' && ZONED_TYPE.test(type)) {
+      exact.push(`t.${quoteIdent(col)} = ${quoteLiteral(value)}::${type.startsWith('time') && !type.startsWith('timestamp') ? 'timetz' : 'timestamptz'}`);
+    } else {
+      plain[col] = value;
+    }
+  }
+  const parts = Object.keys(plain).length > 0 || exact.length === 0 ? [`to_jsonb(t.*) @> ${jsonLiteral(plain)}`] : [];
+  return [...parts, ...exact].join(' AND ');
+}
+
+/** A comment line can't be ended early: Postgres also ends a -- comment at a lone carriage return. */
+function commentSafe(line: string): string {
+  // eslint-disable-next-line no-control-regex
+  return line.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ');
+}
+
 function pick(row: Row, keep: (col: string) => boolean): Row {
   return Object.fromEntries(Object.entries(row).filter(([col]) => keep(col)));
 }
@@ -88,6 +119,17 @@ function finalStates(rec: Recording): { rows: RowState[]; truncated: Map<string,
           });
         } else {
           skipped.push(`${c.op} on ${table} (no primary key, so the row can't be identified)`);
+          // A row of this table changed, and without a key we can't tell which: every row inserted here
+          // that it could have been (its values agree with what the change says the row held) may no
+          // longer look as recorded, so it isn't checked.
+          const before = c.oldValues ?? {};
+          const couldBe = (values: Row) => Object.entries(before).every(([col, v]) => !(col in values) || JSON.stringify(values[col]) === JSON.stringify(v));
+          for (const [id, state] of rows) {
+            if (id.startsWith('nokey:') && tableKey(state.schema, state.table) === table && couldBe(state.values)) {
+              rows.delete(id);
+              skipped.push(`rows inserted into ${table} (a later ${c.op} may have changed them)`);
+            }
+          }
         }
         continue;
       }
@@ -185,9 +227,9 @@ export function toSql(rec: Recording, options: SqlExportOptions = {}): string {
         continue;
       }
       if (r.inserted) {
-        checks.push({ step: r.step, name: `${table} ${describeKey(r.key)} was added and removed again`, sql: `NOT EXISTS (SELECT 1 FROM ${from} WHERE to_jsonb(t.*) @> ${jsonLiteral(match)})` });
+        checks.push({ step: r.step, name: `${table} ${describeKey(r.key)} was added and removed again`, sql: `NOT EXISTS (SELECT 1 FROM ${from} WHERE ${matchCondition(match, rec.columns[table])})` });
       } else {
-        checks.push({ step: r.step, name: `${table} ${describeKey(r.key)} was deleted`, sql: `NOT EXISTS (SELECT 1 FROM ${from} WHERE to_jsonb(t.*) @> ${jsonLiteral(match)})` });
+        checks.push({ step: r.step, name: `${table} ${describeKey(r.key)} was deleted`, sql: `NOT EXISTS (SELECT 1 FROM ${from} WHERE ${matchCondition(match, rec.columns[table])})` });
       }
       continue;
     }
@@ -202,7 +244,7 @@ export function toSql(rec: Recording, options: SqlExportOptions = {}): string {
     const cols = Object.keys(values).filter((c) => !(c in key));
     const verb = r.inserted ? 'was inserted' : 'was updated';
     const what = cols.length ? ` with ${cols.join(', ')}` : '';
-    checks.push({ step: r.step, name: `${table} ${r.key ? describeKey(r.key) : 'row'} ${verb}${what}`, sql: `EXISTS (SELECT 1 FROM ${from} WHERE to_jsonb(t.*) @> ${jsonLiteral(match)})` });
+    checks.push({ step: r.step, name: `${table} ${r.key ? describeKey(r.key) : 'row'} ${verb}${what}`, sql: `EXISTS (SELECT 1 FROM ${from} WHERE ${matchCondition(match, rec.columns[table])})` });
   }
 
   checks.sort((a, b) => a.step - b.step);
@@ -220,7 +262,8 @@ export function toSql(rec: Recording, options: SqlExportOptions = {}): string {
     header.push(`-- Left out of the checks: ${[...leftOut].sort().join(', ')}.`);
     if ([...leftOut].some((c) => !c.endsWith('(masked)'))) header.push('--   Use --include-timestamps to check timestamp columns too.');
   }
-  for (const s of skipped) header.push(`-- Not checked: ${s}.`);
+  for (const s of [...new Set(skipped)]) header.push(`-- Not checked: ${s}.`);
+  for (let i = 0; i < header.length; i++) header[i] = commentSafe(header[i]!);
   header.push('');
 
   if (checks.length === 0) return [...header, '-- Nothing to check.', ''].join('\n');

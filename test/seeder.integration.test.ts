@@ -118,6 +118,20 @@ seed:
     expect(r.rows[0]!.alias).toBe('buyer');
   });
 
+  it('links a required foreign key to the row it is nested under further up, not a new one', async () => {
+    await db.query('CREATE TABLE reviews (id serial PRIMARY KEY, order_id int NOT NULL REFERENCES orders, customer_id int NOT NULL REFERENCES customers, stars int NOT NULL)');
+    const r = await seed(db, scenario('seed:\n  customers:\n    name: Pat\n    orders:\n      status: PAID\n      total: 5\n      reviews: { stars: 5 }\n'), { by });
+    expect(r.rows.map((x) => x.table.replace('public.', ''))).toEqual(['customers', 'orders', 'reviews']);
+    expect(plain(r.rows[2]!.values)).toMatchObject({ order_id: r.rows[1]!.key.id, customer_id: r.rows[0]!.key.id });
+  });
+
+  it('gives the database numbers exactly as the scenario writes them', async () => {
+    await db.query('CREATE TABLE contacts (id serial PRIMARY KEY, phone text NOT NULL, version numeric NOT NULL, big bigint NOT NULL)');
+    const r = await seed(db, scenario('seed:\n  contacts: { phone: 0771234567, version: 1.10, big: 9007199254740993 }\n'), { by });
+    expect((await db.query('SELECT phone, version::text, big::text FROM contacts WHERE id = $1', [r.rows[0]!.key.id])).rows[0])
+      .toEqual({ phone: '0771234567', version: '1.10', big: '9007199254740993' });
+  });
+
   it('makes up values that pass checks, enums, lengths and unique constraints', async () => {
     await db.query(`
       CREATE TYPE mood AS ENUM ('calm', 'busy');
@@ -247,6 +261,22 @@ describe('clean a run', () => {
     expect(await checksum()).toBe(before);
   });
 
+  it('deletes a dependent that points at two seeded rows before the other dependent it points at', async () => {
+    // Products are seeded first, so the cleaner looks for customers' children first and meets the
+    // order before the order's item: the item must still be deleted first.
+    const r = await seed(db, scenario('seed:\n  products: { name: Lamp, price: 5 }\n  customers: { name: Pat }\n'), { by });
+    const product = r.rows.find((x) => x.table === 'public.products')!.key.id;
+    const customer = r.rows.find((x) => x.table === 'public.customers')!.key.id;
+    const order = (await db.query("INSERT INTO orders (customer_id, status, total) VALUES ($1, 'PENDING', 5) RETURNING id", [customer])).rows[0].id;
+    await db.query('INSERT INTO order_items (order_id, product_id, qty, unit_price) VALUES ($1, $2, 1, 5)', [order, product]);
+
+    const { plan } = await clean(db, { kind: 'run', runIds: [r.runId!] }, opts);
+    const tables = plan.actions.map((a) => a.table.replace('public.', ''));
+    expect(tables.indexOf('order_items')).toBeLessThan(tables.indexOf('orders'));
+    await clean(db, { kind: 'run', runIds: [r.runId!] }, { ...opts, apply: true, includeDependents: true });
+    expect(await count(`orders WHERE id = ${order}`)).toBe(0);
+  });
+
   it('won\'t delete rows another tester claimed without --force, and releases claims on deleted rows', async () => {
     const r = await seed(db, scenario('seed:\n  customers: 2\n'), { by });
     const [a, b] = r.rows.map((x) => String(x.key.id));
@@ -274,8 +304,11 @@ describe('clean a run', () => {
 
     const preview = await clean(db, { kind: 'restore', file: done.backup! }, opts);
     expect(preview.plan.actions.map((a) => a.op)).toEqual(Array(9).fill('insert'));
+    expect((await runs.get(db, r.runId!)).cleanedAt).not.toBeNull();
     const restored = await clean(db, { kind: 'restore', file: done.backup! }, { ...opts, apply: true });
     expect(await checksum()).toBe(seeded);
+    // The run has its rows back, so it is listed and can be cleaned again.
+    expect((await runs.get(db, r.runId!)).cleanedAt).toBeNull();
 
     // Restoring twice finds every row already there: nothing is overwritten.
     const twice = await clean(db, { kind: 'restore', file: done.backup! }, opts);
@@ -323,6 +356,28 @@ describe('undo a recorded session', () => {
     expect(plain(customer.map((a) => a.op === 'update' && a.set))).toEqual([{ name: 'Al' }, { name: 'Alice Tester', email: 'alice@example.com' }]);
     // The TRUNCATE can't be undone, and it broke the history of the stock row place_order() updated.
     expect(plan.skipped.map((s) => [s.reason, s.key])).toEqual([['truncate', null], ['conflict', { product_id: 2 }]]);
+  });
+
+  it('undoes changes to arrays and timestamps made by an app in another time zone', async () => {
+    await db.query("CREATE TABLE tagged (id int PRIMARY KEY, tags text[] NOT NULL, seen_at timestamptz NOT NULL)");
+    await db.query("INSERT INTO tagged VALUES (1, '{a,b}', '2026-10-13 10:00:00.123456+00')");
+    await trigger.install(db);
+    const before = await checksum();
+    const app = await connectTest();
+    try {
+      await app.query("SET TimeZone = 'Asia/Kolkata'"); // the recorder captures values as the app's session prints them
+      await sessions.start(db, identity, 'Tags');
+      await app.query("UPDATE tagged SET tags = '{c}', seen_at = '2026-10-14 08:00+00' WHERE id = 1");
+      await app.query("INSERT INTO tagged VALUES (2, '{x}', now())");
+      const rec = await sessions.stop(db, identity);
+
+      const { plan } = await clean(db, { kind: 'session', recording: rec }, opts);
+      expect(plan.skipped).toEqual([]); // the same moments, though written in another time zone
+      await clean(db, { kind: 'session', recording: rec }, { ...opts, apply: true });
+      expect(await checksum()).toBe(before);
+    } finally {
+      await app.end();
+    }
   });
 
   it('puts the database back, leaving rows someone changed after the session alone', async () => {

@@ -118,6 +118,8 @@ function errorMessage(err: unknown): string {
 export async function checkRules(db: Db, rec: Recording | null, rules: Rule[], options: CheckOptions = {}): Promise<RuleResult[]> {
   const allRows = options.allRows ?? false;
   const limit = options.limit ?? 5;
+  // LIMIT 0 would return no rows, and a rule with no rows passes: never let that happen silently.
+  if (!Number.isInteger(limit) || limit < 1) throw new UserError(`The row limit must be a whole number of at least 1, not ${limit}.`);
   if (!rec && !allRows) throw new UserError('A session is needed to know which rows to check.', 'Pass a session id, or --all-rows to check whole tables.');
   const touched = rec ? touchedRows(rec) : new Map<string, TouchedTable>();
   const results: RuleResult[] = [];
@@ -133,7 +135,15 @@ export async function checkRules(db: Db, rec: Recording | null, rules: Rule[], o
       // Resolve {{...}} names first, so a typo is reported clearly instead of as a SQL error.
       const expansions = new Map<string, string>();
       for (const name of macroTables(rule.sql)) {
-        const resolved = await resolveTable(db, name);
+        // A name Postgres can't even parse ({{a b}}) raises an error: keep it from aborting the other rules.
+        await db.query('SAVEPOINT propmaster_name');
+        let resolved: { schema: string; table: string } | null = null;
+        try {
+          resolved = await resolveTable(db, name);
+          await db.query('RELEASE SAVEPOINT propmaster_name');
+        } catch {
+          await db.query('ROLLBACK TO SAVEPOINT propmaster_name');
+        }
         if (!resolved) {
           Object.assign(result, { status: 'error', error: `Unknown table {{${name}}}.` });
           break;

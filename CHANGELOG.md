@@ -21,6 +21,59 @@ Tool 3, the **Seeder & Cleaner**.
 ### Changed
 
 - `propmaster uninstall` also removes the seed-run tracking, and warns first when runs still have data (their rows stay in the database, untracked).
+- In a scenario, a required foreign key to a row the current row is nested under further up (`order_items` under `customers > orders`, with a required `customer_id`) uses that row instead of being reported as a cycle.
+- The web app's link works in a second tab or from a bookmark while the server runs (the token is kept in the browser, not only in the tab).
+- Masked exports also hide secrets inside JSON values (`{"api_token": …}` in a settings column) and e-mail addresses inside longer text.
+
+### Fixed
+
+From a review of the whole project.
+
+**Safety**
+- The production guard read only the address of a connection string. The driver connects to `?host=` / `?port=` when given, and falls back to `PGHOST` / `PGDATABASE`, so `postgres://u@localhost/test?host=prod-db` got through. The guard now checks where the connection really goes.
+- `record check --limit 0` returned no rows, so every rule passed. `--limit`, `--max-rows` and `--port` now refuse anything but whole numbers in range.
+- SQL export: a session or table name with a carriage return could end the header comment and put live SQL in the script. Control characters in header lines are now spaces.
+- The web app's Setup page could switch or remove the database in use while a recording ran on it, leaving the recording with no way to stop it from the app. The server now refuses, and the buttons are disabled.
+- Pages kept their state when you switched databases: a clean preview of run #7 on one database could be applied to run #7 on another, and ticked sessions could be deleted on the other one. Every page now starts afresh when the database changes.
+- Saving the rules editor under a new path could overwrite another `.sql` file (a migration, say) without asking. "Run rules" saved to the path typed in the box, even when that file hadn't been opened.
+
+**Wrong results**
+- SQL export checks for array and json columns used containment, so `["a"]` passed against `["a","b"]`. They now compare whole values. `timestamptz` columns (`--include-timestamps`) compare as timestamps, so a script recorded in one time zone passes in another.
+- SQL export: a row inserted into a table without a primary key was still checked with its first values after a later UPDATE or DELETE on that table could have changed it.
+- Undoing a session skipped rows as "changed since" when the app's session used another time zone (`created_at` came back as different text for the same moment), and failed on array columns ("malformed array literal").
+- Cleaning with dependents could delete a row before another dependent that points at it (an order before its item, when the item also points at a seeded product), failing the clean.
+- One parent with a NULL in the referenced column hid every dependent of the other parents.
+- Restoring a clean's backup left the run marked as cleaned, so it was no longer listed or cleanable.
+- A backup was kept when the clean's commit failed.
+- Scenario numbers lost their exact text: `0771234567` became `771234567`, `1.10` became `1.1`, and `9007199254740993` became `…992`.
+- Unique clashes on a several-column unique key were retried with the same values.
+- `clean --mine` only cleaned the newest 50 of your runs.
+- `claims add orders 0042` didn't find order 42, and scanned the whole table.
+- Recipe parameters with capital letters (`-- param: Since date`) were always reported as unused.
+- The recorder's triggers kept the old key columns after a primary key column was renamed, so every row got an empty key. They are now attached again (run `propmaster install` once to get this).
+- A rule naming a table Postgres can't parse (`{{a b}}`) stopped every other rule.
+- `--since 2026-10-13` meant midnight UTC, not midnight local time like `2026-10-13T10:30`.
+- Change ids above 2³¹ would have overflowed when loading a session.
+
+**Web app**
+- A slow, older answer could overwrite a newer one (polling, switching pages), and polls piled up behind a slow one. Polling also pauses in a background tab.
+- A clean preview that arrived late could show another run's plan above the button.
+- The app was a blank page when its settings couldn't be read, or the token was missing. It now says why.
+- Failed loads on the Find data and Seed & clean pages looked like "open a folder".
+- Pressing Enter in a Find parameter ran the recipe with required parameters still empty, and twice when pressed twice.
+- The tab title kept "● REC" after stopping from the floating window on another page.
+- When another tab or the terminal switched the database in use, this tab kept showing the old one's name. It now follows the switch (and starts its page afresh).
+- A request body that wasn't a JSON object caused a server error, and the static file check accepted sibling folders whose names start with `web`.
+- Two settings saves at once could lose one. Query parameters such as `?password=` were shown in the browser.
+- Text and terminal output: values with control characters (escape sequences, a lone carriage return) are shown escaped; Markdown cells keep `&lt;` as written and don't break on line breaks.
+
+**Smaller UI improvements**
+- Confirmations before removing a connection and before releasing all your claims.
+- A warning when saving a connection under a name that's already saved.
+- Copy buttons for the DBA's grant SQL and a clean's backup path.
+- Long clean plans, seeded rows and find results scroll inside their card with the column names kept in view.
+- Dates show the year when it isn't this year; "under a minute left" instead of "0 min left".
+- Space opens a rule's rows and a session, like Enter. "Save & run rules" says it saves.
 
 ## [0.2.0] - 2026-10-13
 

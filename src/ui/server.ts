@@ -6,7 +6,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { basename, extname, resolve } from 'node:path';
+import { basename, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describeDatabase, withDb, type Db } from '../core/db.js';
 import { explainError, UserError } from '../core/errors.js';
@@ -62,6 +62,17 @@ async function withActive<T>(fn: (db: Db, identity: string, profile: profiles.Pr
   return withDb(profile.url, (db) => fn(db, describeDatabase(profile.url), profile));
 }
 
+/** Switching or removing the database mid-recording would leave the recording running with no way to stop it here. */
+async function assertNotRecording(): Promise<void> {
+  let recording = false;
+  try {
+    recording = await withActive(async (db, identity) => (await sessions.status(db, identity)).active !== null);
+  } catch {
+    return; // no active database, or it can't be reached: nothing is recording through this app
+  }
+  if (recording) throw new UserError('A recording is running on the database in use.', 'Stop it on the Record page first.');
+}
+
 const str = (v: unknown, field: string): string => {
   if (typeof v !== 'string' || !v.trim()) throw new UserError(`"${field}" is required.`);
   return v.trim();
@@ -110,7 +121,7 @@ async function me(): Promise<string> {
 }
 
 const durationOf = (v: unknown): number => claims.parseDuration(typeof v === 'string' && v.trim() ? v : '2h');
-const limitOf = (v: unknown): number => (typeof v === 'number' ? v : 25);
+const limitOf = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) ? Math.min(Math.max(v, 1), 500) : 25);
 
 // ---------- API ----------
 
@@ -128,14 +139,17 @@ const routes: [string, RegExp, Handler][] = [
   ['POST', /^\/api\/profiles$/, async (req) => {
     const { name, url } = await req.body();
     await withDb(str(url, 'url'), (db) => db.query('SELECT 1')); // only save connections that work
+    await assertNotRecording(); // saving makes the new connection the one in use
     await profiles.saveProfile({ name: str(name, 'name'), url: str(url, 'url') });
     return { ok: true };
   }],
   ['DELETE', /^\/api\/profiles\/(.+)$/, async (req) => {
+    await assertNotRecording();
     await profiles.removeProfile(decodeURIComponent(req.params[0]!));
     return { ok: true };
   }],
   ['POST', /^\/api\/profiles\/(.+)\/activate$/, async (req) => {
+    await assertNotRecording();
     await profiles.activateProfile(decodeURIComponent(req.params[0]!));
     return { ok: true };
   }],
@@ -202,6 +216,11 @@ const routes: [string, RegExp, Handler][] = [
     if (extname(file).toLowerCase() !== '.sql') throw new UserError(`Rules files must end in .sql, and this one doesn't: ${file}`);
     if (typeof content === 'string') {
       parseRules(content, file); // refuse to save a file the checker can't read
+      // Saving under a new path must not overwrite some other .sql file (a migration, say) by accident.
+      const current = (await profiles.activeProfile()).rulesFile;
+      if (existsSync(file) && (!current || resolve(current) !== resolve(file))) {
+        throw new UserError(`There is already a file at ${file}.`, 'Open it to edit it, or save under a new file name.');
+      }
       await writeFile(file, content, 'utf8');
     } else if (!existsSync(file)) {
       throw new UserError(`Can't find ${file}.`);
@@ -408,12 +427,15 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY) { fail(new UserError('Request too large.')); req.destroy(); return; }
+      if (size > MAX_BODY) { fail(new UserError('Request too large.')); req.removeAllListeners('data'); req.resume(); return; }
       chunks.push(chunk);
     });
     req.on('end', () => {
       if (chunks.length === 0) return ok({});
-      try { ok(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>); } catch { fail(new UserError('The request body is not valid JSON.')); }
+      let body: unknown;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(new UserError('The request body is not valid JSON.')); return; }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(new UserError('The request body must be a JSON object.'));
+      else ok(body as Record<string, unknown>);
     });
     req.on('error', fail);
   });
@@ -421,7 +443,7 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 async function serveStatic(res: ServerResponse, path: string): Promise<void> {
   const file = resolve(WEB_ROOT, `.${decodeURIComponent(path)}`);
-  const inside = file.startsWith(resolve(WEB_ROOT));
+  const inside = file.startsWith(resolve(WEB_ROOT) + sep);
   const target = inside && existsSync(file) && extname(file) ? file : resolve(WEB_ROOT, 'index.html'); // the app handles its own routes
   if (!existsSync(target)) {
     send(res, 500, { error: { message: 'The web app is not built yet.', hint: 'Run: npm run build' } });

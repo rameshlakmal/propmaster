@@ -54,7 +54,7 @@ function Results({ results, allRows }: { results: RuleResult[]; allRows: boolean
               <Fragment key={r.rule.name}>
                 <Table.Row className={expandable ? 'change-row' : undefined} tabIndex={expandable ? 0 : undefined}
                   aria-expanded={expandable ? expanded : undefined} onClick={toggle}
-                  onKeyDown={(e) => { if (e.key === 'Enter') toggle(); }}>
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}>
                   <Table.Cell>{s.icon}</Table.Cell>
                   <Table.RowHeaderCell><Text weight={r.status === 'fail' ? 'bold' : 'regular'}>{r.rule.name}</Text></Table.RowHeaderCell>
                   <Table.Cell><Text size="2" color="gray">{r.status === 'error' ? ''
@@ -122,6 +122,14 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
     setDirty(false);
   }, [file.data]);
 
+  // Leaving the page with unsaved edits asks first.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
   useEffect(() => {
     if (!sessionId && sessions.data?.[0]) setSessionId(sessions.data[0].id);
   }, [sessions.data, sessionId]);
@@ -134,7 +142,8 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
   const open = () => act('open', async () => { await api('PUT', '/rules', { path }); await file.refresh(); });
   const save = () => act('save', async () => { await api('PUT', '/rules', { path, content }); await file.refresh(); });
   const run = () => act('run', async () => {
-    if (dirty) await api('PUT', '/rules', { path, content });
+    // Saves to the file that is open, never to a path typed into the box but not opened yet.
+    if (dirty && file.data?.path) { await api('PUT', '/rules', { path: file.data.path, content }); setDirty(false); }
     const res = await api<{ results: RuleResult[] }>('POST', '/rules/check', { sessionId, allRows });
     setResults({ results: res.results, allRows });
     sessionStorage.removeItem('propmaster-rules-session');
@@ -166,7 +175,7 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
             </Flex>
           </Text>
           <Button size="3" onClick={() => void run()} loading={busy === 'run'} disabled={!file.data?.path || (!allRows && !sessionId)} className="press">
-            <Play weight="fill" /> Run rules
+            <Play weight="fill" /> {dirty ? 'Save & run rules' : 'Run rules'}
           </Button>
         </Flex>
         {results && <Box mt="5"><Results results={results.results} allRows={results.allRows} /></Box>}
@@ -182,7 +191,7 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
             <TextField.Root value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\rules.sql (pasting with quotes is fine)" aria-label="Rules file path" className="mono" />
           </Box>
           <Button variant="soft" onClick={() => void open()} loading={busy === 'open'} disabled={!path}><FolderOpen /> Open</Button>
-          <Button variant="soft" onClick={() => void save()} loading={busy === 'save'} disabled={!path || !dirty}><FloppyDisk /> Save</Button>
+          <Button variant="soft" onClick={() => void save()} loading={busy === 'save'} disabled={!path || (!dirty && path === file.data?.path)}><FloppyDisk /> {file.data?.path && path !== file.data.path ? 'Save as new file' : 'Save'}</Button>
         </Flex>
         {file.data?.error && <Box mb="3"><ErrorCallout error={{ message: file.data.error }} /></Box>}
         <TextArea value={content} onChange={(e) => { setContent(e.target.value); setDirty(true); }} rows={18} spellCheck={false}

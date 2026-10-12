@@ -3,15 +3,16 @@ import { ArrowClockwise, Database, ListChecks, MagnifyingGlass, Plant, PlugsConn
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, STALE_SERVER_EVENT } from './api';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ErrorCallout, RetryButton } from './components/Feedback';
 import { floatingSupported, useFloatingWindow } from './floating';
-import { useLoad, useRoute, useSystemAppearance } from './hooks';
+import { toError, useLoad, useRoute, useSystemAppearance } from './hooks';
 import { FindPage } from './pages/FindPage';
 import { RecordPage } from './pages/RecordPage';
 import { RulesPage } from './pages/RulesPage';
 import { SeedPage } from './pages/SeedPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { SetupPage } from './pages/SetupPage';
-import type { Config, Recording, Status } from './types';
+import type { ApiError, Config, Recording, Status } from './types';
 
 function NavItem({ to, current, icon, children }: { to: string; current: boolean; icon: ReactNode; children: ReactNode }) {
   return (
@@ -45,6 +46,16 @@ function StaleBanner({ kind }: { kind: 'restart-server' | 'reload-page' }) {
   );
 }
 
+/** Without settings there is no page to show: say why, instead of a blank screen. */
+function ConfigError({ error, onRetry }: { error: ApiError; onRetry: () => void }) {
+  return (
+    <Flex direction="column" gap="3" align="start">
+      <ErrorCallout error={error} />
+      <RetryButton onClick={onRetry} />
+    </Flex>
+  );
+}
+
 export function App() {
   const [route] = useRoute();
   const stale = useStaleServer();
@@ -57,12 +68,27 @@ export function App() {
   // Lives here, not on the Record page, so the floating window stays open while you look at other pages.
   const floating = useFloatingWindow({ appearance: useSystemAppearance(), onChange: () => void status.refresh(), onStopped: setStopped });
 
+  // Another tab (or the terminal) switched the database: follow the server, so this tab never shows one
+  // database's name while acting on another.
+  const serverActive = status.data?.profile.name;
+  useEffect(() => {
+    if (serverActive && config.data && serverActive !== config.data.active) void config.refresh();
+  }, [serverActive, config.data?.active]);
+
+  const [switchError, setSwitchError] = useState<ApiError | null>(null);
   const switchProfile = async (name: string) => {
-    await api('POST', `/profiles/${encodeURIComponent(name)}/activate`);
+    setSwitchError(null);
+    try {
+      await api('POST', `/profiles/${encodeURIComponent(name)}/activate`);
+    } catch (err) {
+      setSwitchError(toError(err));
+    }
+    setStopped(null); // it belongs to the other database
     await config.refresh();
     await status.refresh();
   };
   const onProfilesChanged = async () => {
+    setStopped(null);
     await config.refresh();
     await status.refresh();
   };
@@ -78,6 +104,11 @@ export function App() {
           floating={{ supported: floatingSupported, isOpen: floating.isOpen, open: floating.open, close: floating.close }} />;
 
   const recording = status.data?.active;
+
+  // The tab title shows a live recording on every page, and clears when it stops (also from the floating window).
+  useEffect(() => {
+    document.title = recording ? `${recording.paused ? '‖ PAUSED' : '● REC'} ${recording.name} · Propmaster` : 'Propmaster';
+  }, [recording?.name, recording?.paused, Boolean(recording)]);
 
   return (
     <div className="shell">
@@ -131,8 +162,11 @@ export function App() {
       <main className="main">
         <div className="page">
           {stale && <StaleBanner kind={stale} />}
-          {/* Keyed by page, so moving to another page clears a crash. */}
-          <ErrorBoundary key={`${route.page}/${'id' in route ? route.id ?? '' : 'session' in route ? route.session ?? '' : ''}`}>{page}</ErrorBoundary>
+          {switchError && <Box mb="4"><ErrorCallout error={switchError} /></Box>}
+          {config.error && !config.data && <ConfigError error={config.error} onRetry={() => void config.refresh()} />}
+          {/* Keyed by database and page: switching either starts the page afresh (no selection, preview or
+              result from the other database survives), and moving to another page clears a crash. */}
+          <ErrorBoundary key={`${config.data?.active ?? ''}/${route.page}/${'id' in route ? route.id ?? '' : 'session' in route ? route.session ?? '' : ''}`}>{page}</ErrorBoundary>
         </div>
       </main>
     </div>

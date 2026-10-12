@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import { describeDatabase, resolveDatabaseUrl, withDb, type Db } from './core/db.js';
 import { explainError, UserError } from './core/errors.js';
 import { boxTable, brand, cell, hint, icons, makeStyle, spread } from './core/ui.js';
@@ -39,6 +39,16 @@ process.stdout.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EPIPE') process.exit(0);
   throw err;
 });
+
+
+/** For --limit and friends: a whole number of at least `min` (0 rows would make every rule "pass"). */
+function wholeNumber(min: number) {
+  return (value: string): number => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < min) throw new InvalidArgumentError(`Expected a whole number of at least ${min}.`);
+    return n;
+  };
+}
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -192,7 +202,7 @@ record
   .option('--snapshot', 'compare snapshots instead of using triggers (needs only read access)')
   .option('--auto-steps [seconds]', 'no need to type steps: a quiet gap (default 3 s) ends a step, and each step is named after its changes')
   .option('--exclude <tables>', 'snapshot mode: tables to leave out (comma-separated, patterns allowed)', list)
-  .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(DEFAULT_MAX_ROWS).argParser(Number))
+  .addOption(new Option('--max-rows <n>', 'snapshot mode: skip tables with more rows than this').default(DEFAULT_MAX_ROWS).argParser(wholeNumber(1)))
   .action(run(async (ctx, name: string, opts: { snapshot?: boolean; exclude?: string[]; maxRows: number; autoSteps?: boolean | string }) => {
     const autoSteps = opts.autoSteps === undefined || opts.autoSteps === true ? opts.autoSteps : Math.round(Number(opts.autoSteps) * 1000);
     const next = autoSteps
@@ -351,7 +361,8 @@ addFilterOptions(record
   }));
 
 function openFile(file: string): void {
-  const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', file]]
+  // Not `cmd /c start`: cmd would read & ^ % in the path (C:\R&D\report.html) as commands and variables.
+  const [cmd, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', resolve(file)]]
     : process.platform === 'darwin' ? ['open', [file]]
     : ['xdg-open', [file]];
   spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
@@ -363,7 +374,7 @@ record
   .argument('[session]', 'session id, e.g. 12 or s3 (default: the latest)')
   .description('Check business rules against the rows a session touched (exit code 1 if any rule fails)')
   .option('--all-rows', "let {{table}} mean the whole table, not just the session's rows")
-  .addOption(new Option('--limit <n>', 'violating rows to show per rule').default(5).argParser(Number))
+  .addOption(new Option('--limit <n>', 'violating rows to show per rule').default(5).argParser(wholeNumber(1)))
   .option('--timeout <interval>', 'time limit per rule', '30s')
   .action(run(async (ctx, file: string, session: string | undefined, opts: { allRows?: boolean; limit: number; timeout: string }) => {
     if (!existsSync(file)) throw new UserError(`Can't find the rules file ${file}.`);
@@ -473,7 +484,7 @@ program
   .description('Find test data with a recipe, and claim a row so nobody else uses it (exit code 1 if no free row)')
   .addOption(recipesOption())
   .option('-p, --param <name=value>', 'a parameter value (repeatable)', param, {})
-  .addOption(new Option('--limit <n>', 'rows to show').default(10).argParser(Number))
+  .addOption(new Option('--limit <n>', 'rows to show').default(10).argParser(wholeNumber(1)))
   .option('--claim [count]', 'claim the first free row (or this many) for your test')
   .option('--for <duration>', 'how long a claim lasts: 30m, 2h, 1d', '2h')
   .option('--as <name>', 'who is claiming (default: $PROPMASTER_USER, or your OS user name)')
@@ -752,7 +763,8 @@ program
   .action((opts: CleanOpts) => asJson(opts.json, () => run(async (ctx) => {
     const me = claimer(opts.as);
     const runIds = (opts.run ?? []).map((r) => r.replace(/^#/, ''));
-    if (opts.mine) runIds.push(...(await runs.list(ctx.db, { by: me })).map((r) => r.id).filter((id) => !runIds.includes(id)));
+    // Every one of them, not just the newest 50 a listing shows.
+    if (opts.mine) runIds.push(...(await runs.list(ctx.db, { by: me, limit: 100_000 })).map((r) => r.id).filter((id) => !runIds.includes(id)));
     const targets: Target[] = [];
     if (opts.session) targets.push({ kind: 'session', recording: await loadRecording(ctx, opts.session) });
     if (runIds.length) targets.push({ kind: 'run', runIds });
@@ -794,7 +806,7 @@ program
 program
   .command('ui')
   .description('Open the Propmaster web app in your browser')
-  .addOption(new Option('--port <n>', 'port to listen on (127.0.0.1 only)').default(4400).argParser(Number))
+  .addOption(new Option('--port <n>', 'port to listen on (127.0.0.1 only)').default(4400).argParser(wholeNumber(0)))
   .option('--no-open', 'do not open the browser')
   .action(async (opts: { port: number; open: boolean }) => {
     const { startUiServer } = await import('./ui/server.js');

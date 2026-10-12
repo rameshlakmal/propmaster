@@ -127,7 +127,8 @@ class Seeder {
   }
 
   /** Inserts a spec's row(s), then each row's children. */
-  async insertSpec(spec: RowSpec, parent: Parent | null, chain: string[]): Promise<void> {
+  /** `ancestors`: the rows this one is nested under, nearest last (customers, then orders). */
+  async insertSpec(spec: RowSpec, parent: Parent | null, ancestors: Parent[]): Promise<void> {
     const table = requireTable(this.schema, spec.table);
     if (!table.primaryKey.length) {
       throw new UserError(`${this.where(spec)}: ${shortName(table.key)} has no primary key, so its rows couldn't be found again to clean up.`, 'Only tables with a primary key can be seeded.');
@@ -139,7 +140,7 @@ class Seeder {
     for (const [key, value] of Object.entries(spec.fields)) {
       const col = column(table, key);
       if (col) {
-        given.set(col.name, value instanceof Nested ? value.toJSON() : value);
+        given.set(col.name, value instanceof Nested ? value.toJSON() : spec.exact?.[key] ?? value);
       } else if (findTable(this.schema, key)) {
         children.push({ written: key, value });
       } else {
@@ -152,7 +153,9 @@ class Seeder {
 
     const link = parent ? this.linkTo(table, parent, spec) : null;
     for (let n = 1; n <= spec.count; n++) {
-      const row = await this.insertRow(table, given, link && parent ? { fk: link, row: parent.row } : null, spec, n, [...chain, table.key], false);
+      // Only rows made up to satisfy a foreign key can form a cycle; the rows a scenario nests (customers >
+      // orders > order_items) can't, so a required link to a grandparent just gets a new row.
+      const row = await this.insertRow(table, given, link && parent ? { fk: link, row: parent.row } : null, spec, n, [table.key], false, ancestors);
       if (spec.as) {
         if (this.aliases.has(spec.as)) throw new UserError(`${this.where(spec)}: two rows are named "${spec.as}".`, 'Each $as name must be unique in the scenario.');
         this.aliases.set(spec.as, { table, row });
@@ -160,7 +163,7 @@ class Seeder {
       }
       for (const child of children) {
         for (const childSpec of childSpecs(child.written, child.value, spec.line, this.scenario.file)) {
-          await this.insertSpec(childSpec, { table, row }, [...chain, table.key]);
+          await this.insertSpec(childSpec, { table, row }, [...ancestors, { table, row }]);
         }
       }
     }
@@ -184,7 +187,7 @@ class Seeder {
   }
 
   /** Builds and inserts one row; returns it as Postgres stored it. */
-  private async insertRow(table: Table, given: Map<string, unknown>, link: { fk: ForeignKey; row: Row } | null, spec: { line: number }, n: number, chain: string[], auto: boolean): Promise<Row> {
+  private async insertRow(table: Table, given: Map<string, unknown>, link: { fk: ForeignKey; row: Row } | null, spec: { line: number }, n: number, chain: string[], auto: boolean, ancestors: Parent[] = []): Promise<Row> {
     if (this.rows.length >= MAX_ROWS) throw new UserError(`The scenario would create more than ${MAX_ROWS} rows.`, 'Check the $count values and the numbers of rows.');
     const values = new Map<string, Text>();
     const rowToken = this.token();
@@ -213,6 +216,13 @@ class Seeder {
       if (fk.columns.some((c) => values.has(c))) continue;
       const cols = fk.columns.map((c) => column(table, c)!);
       if (!cols.some((c) => c.notNull && !c.hasDefault)) continue; // nullable, or filled by a default: leave it
+      // A row this one is nested under, further up (order_items under customers > orders, with a required
+      // customer_id): that is the row the scenario means.
+      const ancestor = [...ancestors].reverse().find((a) => a.table.key === fk.refTable);
+      if (ancestor) {
+        fk.columns.forEach((c, i) => values.set(c, asText(ancestor.row[fk.refColumns[i]!])));
+        continue;
+      }
       if (fk.refTable === table.key || chain.includes(fk.refTable)) {
         throw new UserError(`${this.where(spec)}: ${shortName(table.key)}.${fk.columns.join(', ')} needs a ${shortName(fk.refTable)} row, which would need a ${shortName(table.key)} row first (a cycle).`,
           `Give ${fk.columns.join(', ')} a value: an existing key, or { $ref: <name> } of a row created earlier in the scenario.`);
@@ -240,8 +250,8 @@ class Seeder {
       await this.db.query('SAVEPOINT pm_row');
       try {
         const row = await this.insert(table, values);
+        await this.track(table, row, auto); // inside the savepoint: a failure here rolls back to it cleanly
         await this.db.query('RELEASE SAVEPOINT pm_row');
-        await this.track(table, row, auto);
         return row;
       } catch (err) {
         await this.db.query('ROLLBACK TO SAVEPOINT pm_row');
@@ -270,11 +280,12 @@ class Seeder {
   private async track(table: Table, row: Row, auto: boolean): Promise<void> {
     const key = Object.fromEntries(table.primaryKey.map((c) => [c, row[c]]));
     const seq = this.rows.length + 1;
+    if (this.tracking) {
+      await this.db.query(
+        'INSERT INTO _propmaster.seeded_rows (run_id, seq, table_schema, table_name, row_key, created_values) VALUES ($1, $2, $3, $4, $5, $6)',
+        [this.runId, seq, table.schema, table.name, JSON.stringify(key), JSON.stringify(row)]);
+    }
     this.rows.push({ seq, table: table.key, key, values: row, auto });
-    if (!this.tracking) return;
-    await this.db.query(
-      'INSERT INTO _propmaster.seeded_rows (run_id, seq, table_schema, table_name, row_key, created_values) VALUES ($1, $2, $3, $4, $5, $6)',
-      [this.runId, seq, table.schema, table.name, JSON.stringify(key), JSON.stringify(row)]);
   }
 
   /** { $ref: name } on a column: the named row's key, through the foreign key the column belongs to. */

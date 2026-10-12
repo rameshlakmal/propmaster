@@ -56,7 +56,7 @@ Columns not given in the scenario:
 
 1. Columns with a default, identity or generated value are left to the database.
 2. Nullable columns are left NULL. A nullable foreign key is left NULL too, so no parent is created needlessly.
-3. A required foreign key gets a **new parent row** (generated the same way, recursively). Required cycles are reported with advice instead of looping.
+3. A required foreign key to a table the row is nested under (further up than its parent) uses that row. Any other required foreign key gets a **new parent row** (generated the same way, recursively). Required cycles are reported with advice instead of looping.
 4. Any other required column gets a value from its type, name and constraints:
    - `CHECK (status IN (...))` and enum types: the first allowed value.
    - `CHECK (qty > 0)`, `>=`, `<`, `<=`, `BETWEEN`: a number inside the bounds.

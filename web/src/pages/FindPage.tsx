@@ -81,7 +81,7 @@ function Results({ result, me, busyKey, onClaim, onSeed }: { result: FindResult;
   const more = result.moreMatches ? 'many' : result.matches - result.rows.length;
   return (
     <Box>
-      <Table.Root variant="surface" size="1">
+      <Table.Root variant="surface" size="1" className="tall-table">
         <Table.Header>
           <Table.Row>
             {result.columns.map((h) => <Table.ColumnHeaderCell key={h}>{h}</Table.ColumnHeaderCell>)}
@@ -125,10 +125,14 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
   // A different recipe starts clean.
   useEffect(() => { setValues({}); setResult(null); setError(null); setClaimed([]); setSeeded(null); }, [recipe.id]);
 
+  // One request at a time: pressing Enter twice, or Find while a claim runs, would race the results.
+  const running = useRef(false);
   const act = async (kind: string, fn: () => Promise<void>) => {
+    if (running.current) return;
+    running.current = true;
     setBusy(kind);
     setError(null);
-    try { await fn(); } catch (err) { setError(toError(err)); } finally { setBusy(null); }
+    try { await fn(); } catch (err) { setError(toError(err)); } finally { running.current = false; setBusy(null); }
   };
   const body = { recipe: recipe.id, params: values };
   const run = () => act('find', async () => {
@@ -181,7 +185,7 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
               ) : (
                 <TextField.Root id={`param-${p.name}`} type={INPUT_TYPE[p.type] ?? 'text'} step={p.type === 'numeric' ? 'any' : undefined}
                   value={values[p.name] ?? ''} placeholder={p.default ?? ''} onChange={(e) => setValues({ ...values, [p.name]: e.target.value })}
-                  onKeyDown={(e) => { if (e.key === 'Enter') void run(); }} />
+                  onKeyDown={(e) => { if (e.key === 'Enter' && required.length === 0) void run(); }} />
               )}
               {p.description && <Text size="1" color="gray">{p.description}</Text>}
             </Flex>
@@ -258,8 +262,8 @@ function TimeLeft({ iso }: { iso: string }) {
   }, []);
   const ms = new Date(iso).getTime() - now;
   if (ms <= 0) return <Text size="2" color="gray">expired</Text>;
-  const m = Math.round(ms / 60000);
-  return <Text size="2" color={m < 15 ? 'amber' : 'gray'}>{m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`}</Text>;
+  const m = Math.floor(ms / 60000);
+  return <Text size="2" color={m < 15 ? 'amber' : 'gray'}>{m < 1 ? 'under a minute left' : m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`}</Text>;
 }
 
 /** "Claiming as ramesh · Change": the name claims are made under, saved for this computer. */
@@ -322,9 +326,16 @@ function Claims({ version, activeProfile, onChanged }: { version: number; active
         <Flex gap="4" align="center" wrap="wrap">
           <Text as="label" size="2"><Flex gap="2" align="center"><Switch size="1" checked={mineOnly} onCheckedChange={setMineOnly} /> Only mine</Flex></Text>
           <Text as="label" size="2"><Flex gap="2" align="center"><Switch size="1" checked={all} onCheckedChange={setAll} /> Show expired</Flex></Text>
-          <Button variant="soft" color="gray" disabled={mine === 0} loading={busy === 'mine'} onClick={() => void act('mine', () => api('POST', '/claims/release-mine'))}>
-            Release all mine ({mine})
-          </Button>
+          {confirming === 'mine' ? (
+            <Flex gap="2">
+              <Button color="red" loading={busy === 'mine'} onClick={() => void act('mine', () => api('POST', '/claims/release-mine'))}>Release {mine} {mine === 1 ? 'claim' : 'claims'}</Button>
+              <Button variant="soft" color="gray" onClick={() => setConfirming(null)}>Keep</Button>
+            </Flex>
+          ) : (
+            <Button variant="soft" color="gray" disabled={mine === 0} onClick={() => setConfirming('mine')}>
+              Release all mine ({mine})…
+            </Button>
+          )}
         </Flex>
       </Flex>
       {(error ?? data.error) && <Box mb="3"><ErrorCallout error={(error ?? data.error)!} /></Box>}
@@ -453,11 +464,12 @@ export function FindPage({ activeProfile }: { activeProfile: string | null }) {
           <Button variant="soft" color="gray" onClick={() => void check()} loading={busy === 'check'} disabled={recipes.length === 0}><Stethoscope /> Check all recipes</Button>
         </Flex>
         {source.data?.error && <Box mt="3"><ErrorCallout error={{ message: source.data.error }} /></Box>}
+        {source.error && <Box mt="3"><ErrorCallout error={source.error} /></Box>}
         {checks && <Box mt="3"><CheckResults results={checks} /></Box>}
       </Card>
 
       {recipes.length === 0 ? (
-        !source.loading && !source.data?.error && (
+        !source.loading && !source.data?.error && !source.error && (
           <Card size="3" mb="5">
             <EmptyState icon={<MagnifyingGlass size={36} />} title="Open a recipe folder">
               A recipe is a SELECT with a "-- recipe: name" line above it, kept in a .sql file next to your tests. Try the demo: the demo/recipes folder of Propmaster.

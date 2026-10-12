@@ -109,7 +109,7 @@ function SessionList({ activeProfile }: { activeProfile: string | null }) {
           {shown.map((s) => (
             <Table.Row key={s.id} className="change-row" tabIndex={0} data-selected={selected.has(s.id) || undefined}
               onClick={() => { location.hash = `sessions/${s.id}`; }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) location.hash = `sessions/${s.id}`; }}>
+              onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); location.hash = `sessions/${s.id}`; } }}>
               <Table.Cell onClick={(e) => e.stopPropagation()}>
                 <Checkbox checked={selected.has(s.id)} disabled={!s.stoppedAt} onCheckedChange={() => toggle(s)} aria-label={`Select session #${s.id}`} />
               </Table.Cell>

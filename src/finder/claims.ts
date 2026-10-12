@@ -249,8 +249,17 @@ export async function keyedTable(db: Db, name: string): Promise<KeyedTable> {
 /** Claims one row by hand ("I'm testing with order 1042"), after checking it exists. */
 export async function claimByKey(db: Db, tableName: string, key: string, opts: { by: string; note?: string; seconds: number }): Promise<ClaimRow> {
   const t = await keyedTable(db, tableName);
-  const { rows } = await db.query(`SELECT 1 FROM ${quoteIdent(t.schema)}.${quoteIdent(t.name)} WHERE ${quoteIdent(t.keyColumn)}::text = $1`, [key]);
+  // Compared as the key's own type (so the primary key index is used, and 0042 finds 42), then claimed
+  // under the key as Postgres writes it, the same text a recipe's claim would use.
+  let rows: { k: string }[] = [];
+  try {
+    ({ rows } = await db.query<{ k: string }>(`SELECT ${quoteIdent(t.keyColumn)}::text AS k FROM ${quoteIdent(t.schema)}.${quoteIdent(t.name)} WHERE ${quoteIdent(t.keyColumn)} = $1`, [key]));
+  } catch (err) {
+    // "abc" for an integer key (22P02), or a number too big for it (22003): there is no such row.
+    if (!['22P02', '22003', '22007', '22008'].includes((err as { code?: string }).code ?? '')) throw err;
+  }
   if (!rows.length) throw new UserError(`${tableName} has no row with ${t.keyColumn} = ${key}.`);
+  key = rows[0]!.k;
   const [got] = await claim(db, { table: t.table, keys: [key], by: opts.by, note: opts.note, seconds: opts.seconds });
   if (!got) {
     const holder = (await activeKeys(db, t.table)).get(key);

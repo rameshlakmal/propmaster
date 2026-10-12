@@ -191,7 +191,14 @@ SELECT c.oid,
           JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
          WHERE i.indrelid = c.oid AND i.indisprimary) AS key_args,
        EXISTS (SELECT 1 FROM _propmaster.excluded_tables x
-                WHERE x.table_schema = n.nspname AND x.table_name = c.relname) AS excluded
+                WHERE x.table_schema = n.nspname AND x.table_name = c.relname) AS excluded,
+       -- The key columns as pg_trigger.tgargs stores them (each name ends in a zero byte): a trigger
+       -- whose arguments differ was attached before the primary key changed, and is attached again.
+       coalesce((SELECT string_agg(convert_to(a.attname, 'UTF8') || '\x00'::bytea, ''::bytea ORDER BY k.ord)
+                   FROM pg_index i
+                  CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k (attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                  WHERE i.indrelid = c.oid AND i.indisprimary), ''::bytea) AS key_bytes
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relkind IN ('r', 'p')
@@ -225,6 +232,13 @@ BEGIN
     END IF;
 
     FOR v_kind IN SELECT * FROM _propmaster.trigger_kinds LOOP
+      -- The primary key was renamed, added or changed since the trigger was attached: its arguments
+      -- name the old columns, so every row would get an empty key. Attach it again.
+      IF v_kind.event <> 'TRUNCATE' AND EXISTS (
+           SELECT 1 FROM pg_trigger g
+            WHERE g.tgrelid = v_table.oid AND g.tgname = v_kind.name AND g.tgargs <> v_table.key_bytes) THEN
+        EXECUTE format('DROP TRIGGER %I ON %I.%I', v_kind.name, v_table.table_schema, v_table.table_name);
+      END IF;
       CONTINUE WHEN EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = v_table.oid AND g.tgname = v_kind.name);
       EXECUTE format(
         'CREATE TRIGGER %I AFTER %s ON %I.%I %s FOR EACH STATEMENT EXECUTE FUNCTION _propmaster.%s(%s)',

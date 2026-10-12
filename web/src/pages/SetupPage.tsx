@@ -1,8 +1,8 @@
-import { Badge, Box, Button, Card, Code, Flex, Heading, IconButton, Text, TextField } from '@radix-ui/themes';
+import { AlertDialog, Badge, Box, Button, Card, Code, Flex, Heading, IconButton, Text, TextField } from '@radix-ui/themes';
 import { CheckCircle, Eye, EyeSlash, Plugs, Trash, Warning, X, XCircle } from '@phosphor-icons/react';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { ErrorCallout, PageHeader } from '../components/Feedback';
+import { CopyButton, ErrorCallout, PageHeader } from '../components/Feedback';
 import { toError } from '../hooks';
 import type { ApiError, Config, Doctor, Status } from '../types';
 
@@ -28,7 +28,10 @@ function DoctorReport({ report }: { report: Doctor }) {
       </Text>
       {report.grants.length > 0 && (
         <Box>
-          <Text as="p" size="2" color="gray" mb="1">For live recording, ask a DBA to run:</Text>
+          <Flex align="center" gap="2" mb="1">
+            <Text as="p" size="2" color="gray">For live recording, ask a DBA to run:</Text>
+            <CopyButton text={report.grants.join('\n')} label="Copy the SQL" />
+          </Flex>
           {report.grants.map((g) => <Code key={g} size="2" style={{ display: 'block', marginBottom: 4 }}>{g}</Code>)}
         </Box>
       )}
@@ -36,13 +39,14 @@ function DoctorReport({ report }: { report: Doctor }) {
   );
 }
 
-function ConnectionForm({ first, onSaved }: { first: boolean; onSaved: () => void }) {
+function ConnectionForm({ first, names, onSaved }: { first: boolean; names: string[]; onSaved: () => void }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState<'test' | 'save' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [report, setReport] = useState<Doctor | null>(null);
+  const replaces = names.includes(name.trim());
 
   const test = async () => {
     setBusy('test'); setError(null); setReport(null);
@@ -72,6 +76,7 @@ function ConnectionForm({ first, onSaved }: { first: boolean; onSaved: () => voi
           <Flex direction="column" gap="2">
             <Text as="label" size="2" weight="medium" htmlFor="conn-name">Name</Text>
             <TextField.Root id="conn-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. EverShop local" />
+            {replaces && <Text size="1" color="amber">A connection called "{name.trim()}" is saved already: saving replaces it.</Text>}
           </Flex>
           <Flex direction="column" gap="2">
             <Text as="label" size="2" weight="medium" htmlFor="conn-url">Connection string</Text>
@@ -89,7 +94,7 @@ function ConnectionForm({ first, onSaved }: { first: boolean; onSaved: () => voi
           {report && <Card variant="surface"><DoctorReport report={report} /></Card>}
           <Flex gap="2">
             <Button type="button" variant="soft" onClick={() => void test()} loading={busy === 'test'} disabled={!url}><Plugs /> Test</Button>
-            <Button type="submit" loading={busy === 'save'} disabled={!url || !name} className="press">Save connection</Button>
+            <Button type="submit" loading={busy === 'save'} disabled={!url || !name} className="press">{replaces ? 'Replace connection' : 'Save connection'}</Button>
           </Flex>
         </Flex>
       </form>
@@ -172,6 +177,9 @@ function ActiveDatabase({ status, onChanged }: { status: Status; onChanged: () =
 export function SetupPage({ config, status, onChanged }: { config: Config; status: Status | null; onChanged: () => void }) {
   const [error, setError] = useState<ApiError | null>(null);
   const first = config.profiles.length === 0;
+  // Switching or removing the database mid-recording would leave the recording with no way to stop it.
+  const recording = Boolean(status?.active);
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -202,10 +210,11 @@ export function SetupPage({ config, status, onChanged }: { config: Config; statu
                   </Box>
                   <Flex gap="2">
                     {p.name !== config.active && (
-                      <Button size="1" variant="soft" onClick={() => void run(() => api('POST', `/profiles/${encodeURIComponent(p.name)}/activate`))}>Use</Button>
+                      <Button size="1" variant="soft" disabled={recording} title={recording ? 'Stop the recording first' : undefined}
+                        onClick={() => void run(() => api('POST', `/profiles/${encodeURIComponent(p.name)}/activate`))}>Use</Button>
                     )}
-                    <IconButton size="1" variant="ghost" color="red" aria-label={`Remove ${p.name}`}
-                      onClick={() => void run(() => api('DELETE', `/profiles/${encodeURIComponent(p.name)}`))}>
+                    <IconButton size="1" variant="ghost" color="red" aria-label={`Remove ${p.name}`} disabled={recording}
+                      title={recording ? 'Stop the recording first' : `Remove ${p.name}`} onClick={() => setRemoving(p.name)}>
                       <Trash />
                     </IconButton>
                   </Flex>
@@ -215,7 +224,22 @@ export function SetupPage({ config, status, onChanged }: { config: Config; statu
           </Card>
         )}
 
-        <ConnectionForm first={first} onSaved={() => { onChanged(); if (first) location.hash = 'record'; }} />
+        <AlertDialog.Root open={removing !== null} onOpenChange={(open) => { if (!open) setRemoving(null); }}>
+          <AlertDialog.Content maxWidth="420px">
+            <AlertDialog.Title>Remove "{removing}"?</AlertDialog.Title>
+            <AlertDialog.Description size="2">
+              Only the saved connection is removed from this app. The database, its recordings and its data are not touched.
+            </AlertDialog.Description>
+            <Flex gap="3" mt="4" justify="end">
+              <AlertDialog.Cancel><Button variant="soft" color="gray">Cancel</Button></AlertDialog.Cancel>
+              <AlertDialog.Action>
+                <Button color="red" onClick={() => { const name = removing!; void run(() => api('DELETE', `/profiles/${encodeURIComponent(name)}`)); }}>Remove</Button>
+              </AlertDialog.Action>
+            </Flex>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
+
+        <ConnectionForm first={first} names={config.profiles.map((p) => p.name)} onSaved={() => { onChanged(); if (first) location.hash = 'record'; }} />
       </Flex>
     </Box>
   );

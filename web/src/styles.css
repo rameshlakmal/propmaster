@@ -555,3 +555,16 @@ body {
 .clean-panel {
   scroll-margin-top: 24px;
 }
+
+/* Long lists (a clean plan, found rows) scroll inside their card, keeping the column names and the
+   buttons below them in view. */
+.tall-table .rt-ScrollAreaViewport {
+  max-height: min(60vh, 520px);
+}
+
+.tall-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-panel-solid);
+}

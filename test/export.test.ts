@@ -119,6 +119,34 @@ describe('SQL export', () => {
     expect(toSql(recording([step(1, 'x')]))).toContain('-- Nothing to check.');
   });
 
+  it('compares arrays and json as whole values, and timestamptz as timestamps', () => {
+    const rec = recording([step(1, 'x', [change({ rowKey: { id: 1 }, newValues: { id: 1, tags: ['a'], meta: { a: 1 }, paid_at: '2026-10-13T10:00:00+05:30' } })])], {
+      columns: { 'public.orders': [{ name: 'id', type: 'integer' }, { name: 'tags', type: 'text[]' }, { name: 'meta', type: 'jsonb' }, { name: 'paid_at', type: 'timestamp with time zone' }] },
+    });
+    const sql = toSql(rec, { includeTimestamps: true });
+    // Containment would let ["a"] match ["a","b"]: whole-value equality can't.
+    expect(sql).toContain(`to_jsonb(t.*) @> '{"id":1}'::jsonb AND to_jsonb(t.*) -> 'tags' = '["a"]'::jsonb AND to_jsonb(t.*) -> 'meta' = '{"a":1}'::jsonb AND t."paid_at" = '2026-10-13T10:00:00+05:30'::timestamptz`);
+  });
+
+  it('keeps names with line breaks inside the header comments', () => {
+    const sql = toSql(recording([step(1, 'x', [change()])], { name: 'x\rDROP TABLE orders;--' }));
+    const live = sql.split(/[\r\n]/).filter((l) => l.trim() && !l.startsWith('--'));
+    expect(live.some((l) => l.includes('DROP TABLE'))).toBe(false);
+    expect(sql).toContain('"x DROP TABLE orders;--"');
+  });
+
+  it("stops checking a keyless inserted row once a later change may have altered it", () => {
+    const rec = recording([step(1, 'x', [
+      change({ tableName: 'views', rowKey: null, newValues: { path: '/cart', hits: 1 } }),
+      change({ tableName: 'views', rowKey: null, newValues: { path: '/home', hits: 1 } }),
+      change({ tableName: 'views', op: 'UPDATE', rowKey: null, oldValues: { hits: 1, path: '/cart' }, newValues: { hits: 2 } }),
+    ])]);
+    const sql = toSql(rec);
+    expect(sql).not.toContain('"/cart"');
+    expect(sql).toContain(`'{"path":"/home","hits":1}'::jsonb`);
+    expect(sql).toContain('-- Not checked: rows inserted into public.views (a later UPDATE may have changed them).');
+  });
+
   it('has a strict form for CI', () => {
     const sql = toSql(checkoutRecording(), { strict: true });
     expect(sql).toContain('DO $propmaster_checks$');

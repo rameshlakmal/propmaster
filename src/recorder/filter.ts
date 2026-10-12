@@ -86,6 +86,10 @@ export function parseTime(text: string, now = new Date()): Date {
     return d;
   }
 
+  // A bare date means midnight here, like 2026-10-13T10:30 means 10:30 here (JS would read it as UTC midnight).
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
+  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) {
     throw new UserError(`Can't read the time "${text}".`, 'Use 15m, 2h, 10:30, or an ISO date such as 2026-10-07T10:30.');

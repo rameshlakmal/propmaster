@@ -115,3 +115,9 @@ export async function trackedRows(db: Db, runId: string): Promise<TrackedRow[]> 
 export async function markCleaned(db: Db, runIds: string[], by: string): Promise<void> {
   await db.query('UPDATE _propmaster.seed_runs SET cleaned_at = now(), cleaned_by = $2 WHERE id = ANY($1::bigint[])', [runIds, by]);
 }
+
+/** A restore put a run's rows back: it has data again, and can be cleaned again. */
+export async function markRestored(db: Db, runIds: string[]): Promise<void> {
+  if (!runIds.length || !(await runsExist(db))) return;
+  await db.query('UPDATE _propmaster.seed_runs SET cleaned_at = NULL, cleaned_by = NULL WHERE id = ANY($1::bigint[])', [runIds]);
+}

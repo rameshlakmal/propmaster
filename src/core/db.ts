@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { UserError } from './errors.js';
-import { assertNotProduction } from './guard.js';
+import { assertNotProduction, connectionTarget } from './guard.js';
 import { parseJsonExact } from './json.js';
 
 export type Db = pg.Client;
@@ -41,7 +41,12 @@ export async function connect(databaseUrl: string): Promise<Db> {
 
   const db = new pg.Client({ connectionString: databaseUrl, application_name: 'propmaster', types });
   await db.connect();
-  await db.query("SET lock_timeout = '5s'");
+  try {
+    await db.query("SET lock_timeout = '5s'");
+  } catch (err) {
+    await db.end().catch(() => undefined);
+    throw err;
+  }
   return db;
 }
 
@@ -57,6 +62,6 @@ export async function withDb<T>(databaseUrl: string, fn: (db: Db) => Promise<T>)
 
 /** host:port/database, without credentials: safe to print and to store in local files. */
 export function describeDatabase(databaseUrl: string): string {
-  const url = new URL(databaseUrl);
-  return `${url.hostname}:${url.port || '5432'}${url.pathname}`;
+  const { host, port, database } = connectionTarget(databaseUrl);
+  return `${host}:${port}/${database}`;
 }

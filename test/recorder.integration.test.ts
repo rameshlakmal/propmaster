@@ -37,6 +37,17 @@ describe('install and uninstall', () => {
     expect(await changes()).toHaveLength(1);
   });
 
+  it('attaches the triggers again when a primary key column is renamed', async () => {
+    await db.query('CREATE TABLE coupons (code text PRIMARY KEY, pct int)');
+    await recorder.install(db);
+    await db.query('ALTER TABLE coupons RENAME COLUMN code TO coupon_code');
+    await recorder.start(db, 's'); // attaches new and changed tables
+    await db.query("INSERT INTO coupons VALUES ('TEN', 10)");
+    await recorder.stop(db);
+    expect((await changes())[0]!.rowKey).toEqual({ coupon_code: 'TEN' });
+    expect(await recorder.install(db)).toBe(0); // and nothing changes when nothing did
+  });
+
   it('uninstall removes the schema and every trigger', async () => {
     await recorder.uninstall(db);
     expect(await recorder.isInstalled(db)).toBe(false);

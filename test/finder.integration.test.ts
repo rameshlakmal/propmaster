@@ -183,6 +183,9 @@ describe('claims', () => {
     const added = await claims.claimByKey(db, 'orders', '2', { by: 'ana', seconds: 60 });
     await expect(claims.claimByKey(db, 'orders', '2', { by: 'ben', seconds: 60 })).rejects.toThrow(`orders 2 is already claimed by ana (claim #${added.id}).`);
     await expect(claims.claimByKey(db, 'orders', '99', { by: 'ben', seconds: 60 })).rejects.toThrow('orders has no row with id = 99.');
+    await expect(claims.claimByKey(db, 'orders', 'abc', { by: 'ben', seconds: 60 })).rejects.toThrow('orders has no row with id = abc.');
+    // Found by its value, and claimed under the key as Postgres writes it.
+    await expect(claims.claimByKey(db, 'orders', '0002', { by: 'ben', seconds: 60 })).rejects.toThrow(`orders 2 is already claimed by ana (claim #${added.id}).`);
 
     // Extending adds to the time left: 60 s + 1 day.
     const extended = await claims.extend(db, added.id, 86400, { by: 'ana' });

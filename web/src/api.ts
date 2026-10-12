@@ -1,17 +1,24 @@
 // Talks to the local Propmaster server. The secret token arrives once in the page URL (?token=...),
-// is kept for this browser tab only, and is sent with every API call.
+// is kept in this browser (so a second tab or a bookmark works while the server runs; a restarted
+// server mints a new one) and is sent with every API call.
 import type { ApiError } from './types';
 
 const TOKEN_KEY = 'propmaster-token';
+let memo = '';
+
+function store(): Storage | null {
+  try { return localStorage; } catch { return null; }
+}
 
 function token(): string {
   const fromUrl = new URLSearchParams(location.search).get('token');
   if (fromUrl) {
-    sessionStorage.setItem(TOKEN_KEY, fromUrl);
+    try { store()?.setItem(TOKEN_KEY, fromUrl); } catch { /* storage blocked: this page load still works */ }
+    memo = fromUrl;
     // Keep the token out of the address bar and history, but keep the page (#sessions/12) the link points to.
     history.replaceState(null, '', location.pathname + location.hash);
   }
-  return sessionStorage.getItem(TOKEN_KEY) ?? '';
+  try { return store()?.getItem(TOKEN_KEY) ?? memo; } catch { return memo; }
 }
 
 export class RequestError extends Error {

@@ -233,11 +233,6 @@ interface RecordPageProps {
 }
 
 export function RecordPage({ status, statusError, onChange, stopped, onStopped, floating }: RecordPageProps) {
-  // Keep the page title in step with the recording, so the browser tab shows it too.
-  useEffect(() => {
-    document.title = status?.active ? `${status.active.paused ? '‖ PAUSED' : '● REC'} ${status.active.name} · Propmaster` : 'Propmaster';
-  }, [status?.active]);
-
   if (!status) {
     return statusError ? <ErrorCallout error={statusError} /> : <TimelineSkeleton />;
   }
