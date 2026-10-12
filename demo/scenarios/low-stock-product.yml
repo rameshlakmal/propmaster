@@ -1,0 +1,13 @@
+# A product that is almost sold out, for "only N left" and out-of-stock tests.
+name: Product with low stock
+tags: [products, inventory]
+params:
+  stock: { type: int, default: 1, description: Units left }
+
+seed:
+  products:
+    $as: product
+    name: Last Few Lanterns
+    price: 35.00
+    inventory:
+      stock: "{{stock}}"

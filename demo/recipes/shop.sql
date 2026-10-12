@@ -4,11 +4,13 @@
 --
 -- Each recipe is one SELECT. Parameters (:name) are declared with "-- param:" and sent as bind values.
 -- "-- claim: <table>" lets testers claim a row so nobody else uses it while they test.
+-- "-- seed: <scenario>" names the scenario (demo/scenarios) that creates such data: find ... --seed.
 
 -- recipe: Customer who has never ordered
 -- A brand-new shopper, for first-purchase and empty-order-history tests.
 -- tags: customers, checkout, new-user
 -- claim: customers
+-- seed: new-customer
 SELECT c.id, c.email, c.name
   FROM customers c
  WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)
@@ -19,6 +21,7 @@ SELECT c.id, c.email, c.name
 -- tags: customers, orders, returning
 -- param: min_orders int = 2 | At least this many orders
 -- claim: customers via customer_id
+-- seed: two-orders
 SELECT c.id AS customer_id, c.email, count(o.id) AS orders, max(o.created_at) AS last_order
   FROM customers c
   JOIN orders o ON o.customer_id = c.id
@@ -41,6 +44,7 @@ SELECT o.id, o.status, o.total, c.email AS customer, o.created_at
 -- tags: products, inventory, edge-case
 -- param: max_stock int = 10 | At most this many in stock
 -- claim: products
+-- seed: low-stock-product
 SELECT p.id, p.sku, p.name, p.price, i.stock
   FROM products p
   JOIN inventory i ON i.product_id = p.id
@@ -61,6 +65,7 @@ SELECT p.id, p.sku, p.name, p.price
 -- A broken order, to test refunds, support tools and reconciliation reports.
 -- tags: orders, payments, negative
 -- claim: orders via order_id
+-- seed: underpaid-order
 SELECT o.id AS order_id, o.total, p.amount AS paid, o.total - p.amount AS difference
   FROM orders o
   JOIN payments p ON p.order_id = o.id

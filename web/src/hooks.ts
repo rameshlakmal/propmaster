@@ -7,11 +7,13 @@ export type Route =
   | { page: 'sessions'; id?: string }
   | { page: 'rules' }
   | { page: 'find' }
+  | { page: 'seed'; session?: string }
   | { page: 'setup' };
 
 function parseHash(): Route {
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
   if (page === 'sessions') return { page, id: id || undefined };
+  if (page === 'seed') return { page, session: id || undefined }; // #seed/12: undo session 12
   if (page === 'rules' || page === 'find' || page === 'setup') return { page };
   return { page: 'record' };
 }

@@ -1,0 +1,21 @@
+# A broken order: the payment is less than the order total.
+name: Underpaid order
+description: An order of 42.25 whose payment doesn't cover it, for refund, support and reconciliation tests.
+tags: [orders, payments, negative]
+params:
+  paid: { type: numeric, default: 37.25, description: What the payment covered (the order total is 42.25) }
+
+seed:
+  customers:
+    $as: buyer
+  orders:
+    customer_id: { $ref: buyer }   # the customer above
+    status: PAID
+    total: 42.25
+    order_items:
+      product_id: 3                # an existing product: Lessons Learned in Testing
+      qty: 1
+      unit_price: 42.25
+    payments:
+      amount: "{{paid}}"
+      method: CARD

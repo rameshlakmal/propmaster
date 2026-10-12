@@ -25,7 +25,7 @@ export interface ClaimTarget {
 }
 
 export interface FindResult {
-  recipe: Pick<Recipe, 'id' | 'name' | 'file' | 'line'>;
+  recipe: Pick<Recipe, 'id' | 'name' | 'file' | 'line' | 'seed'>;
   params: Record<string, string>;
   columns: string[];
   rows: FoundRow[];
@@ -151,7 +151,7 @@ export async function find(db: Db, recipe: Recipe, options: FindOptions = {}): P
       const first = rows[0];
       const counted = first ? Number(first.__pm_matches) : 0;
       return {
-        recipe: { id: recipe.id, name: recipe.name, file: recipe.file, line: recipe.line },
+        recipe: { id: recipe.id, name: recipe.name, file: recipe.file, line: recipe.line, seed: recipe.seed },
         params,
         columns,
         rows: rows.map(({ __pm_key, __pm_held, __pm_n: _n, __pm_matches: _m, __pm_claimed: _c, ...values }) => ({

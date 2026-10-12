@@ -63,8 +63,10 @@ export function formatFindResult(result: FindResult, claimed: ClaimRow[] = [], {
   counts.push(`${result.ms} ms`);
   const lines = [` ${brand(c)}  ${c.bold(result.recipe.name)}${params ? `  ${c.dim(params)}` : ''}`, ` ${c.dim(counts.join(' · '))}`, ''];
 
+  // A recipe that names a seed scenario can make the data it couldn't find.
+  const create = result.recipe.seed ? `create one: propmaster find "${result.recipe.id}" --seed (scenario ${result.recipe.seed})` : null;
   if (result.rows.length === 0) {
-    lines.push(` ${i.idle} No rows match.`, hint(c, 'try other parameter values, or create the data you need'));
+    lines.push(` ${i.idle} No rows match.`, hint(c, create ?? 'try other parameter values, or create the data you need'));
     return lines.join('\n');
   }
 
@@ -95,6 +97,8 @@ export function formatFindResult(result: FindResult, claimed: ClaimRow[] = [], {
     lines.push(hint(c, `when you are done: propmaster claims release ${claimed.map((cl) => cl.id).join(' ')}`));
   } else if (withStatus && result.rows.some((r) => !r.claimedBy)) {
     lines.push(hint(c, 'to keep one for your test, run again with --claim'));
+  } else if (create) {
+    lines.push(hint(c, `every match is claimed by someone else; ${create}`));
   }
   return lines.join('\n');
 }

@@ -75,6 +75,13 @@ describe('parseRecipes', () => {
     expect(() => parseRecipes('-- recipe: X\n;', 'r.sql')).toThrow('has no query');
   });
 
+  it('reads the seed scenario that creates the data, once', () => {
+    const [r] = parseRecipes('-- recipe: New customer\n-- seed: new-customer\nSELECT id FROM customers', 'a.sql');
+    expect(r!.seed).toBe('new-customer');
+    expect(() => parseRecipes('-- recipe: X\n-- seed: a\n-- seed: b\nSELECT 1', 'a.sql')).toThrow('a.sql, line 3: recipe "X" has more than one "-- seed:" line.');
+    expect(() => parseRecipes('-- recipe: X\n-- seed:\nSELECT 1', 'a.sql')).toThrow('"-- seed:" needs a scenario');
+  });
+
   it('keeps reading the header across blank lines', () => {
     const [r] = parseRecipes('-- recipe: Spaced\n\n-- For a test.\n\n-- tags: a\n-- claim: customers\n\nSELECT id FROM customers');
     expect(r).toMatchObject({ description: 'For a test.', tags: ['a'], claim: { table: 'customers' }, sql: 'SELECT id FROM customers' });

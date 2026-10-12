@@ -15,6 +15,8 @@ export interface Profile {
   rulesFile?: string;
   /** Recipe folder (or .sql file) used on the Find page. */
   recipesPath?: string;
+  /** Scenario folder (or .yml file) used on the Seed & clean page. */
+  scenariosPath?: string;
 }
 
 export interface UiConfig {
@@ -56,7 +58,10 @@ export async function saveProfile(profile: Profile): Promise<UiConfig> {
   assertNotProduction(profile.url);
   const config = await readConfig();
   const existing = config.profiles.find((p) => p.name === name);
-  const saved: Profile = { name, url: profile.url.trim(), rulesFile: profile.rulesFile ?? existing?.rulesFile, recipesPath: profile.recipesPath ?? existing?.recipesPath };
+  const saved: Profile = {
+    name, url: profile.url.trim(), rulesFile: profile.rulesFile ?? existing?.rulesFile, recipesPath: profile.recipesPath ?? existing?.recipesPath,
+    scenariosPath: profile.scenariosPath ?? existing?.scenariosPath,
+  };
   config.profiles = [...config.profiles.filter((p) => p.name !== name), saved];
   config.active = name;
   await writeConfig(config);
@@ -97,6 +102,15 @@ export async function setRecipesPath(name: string, recipesPath: string): Promise
   return config;
 }
 
+export async function setScenariosPath(name: string, scenariosPath: string): Promise<UiConfig> {
+  const config = await readConfig();
+  const profile = config.profiles.find((p) => p.name === name);
+  if (!profile) throw new UserError(`There is no connection called "${name}".`);
+  profile.scenariosPath = scenariosPath;
+  await writeConfig(config);
+  return config;
+}
+
 /** Sets (or, with an empty name, clears) the name the web app claims rows under. */
 export async function setClaimAs(name: string): Promise<UiConfig> {
   const config = await readConfig();
@@ -121,7 +135,7 @@ export function publicProfile(profile: Profile): Profile & { display: string } {
     const u = new URL(profile.url);
     if (u.password) u.password = '****';
     display = `${u.hostname}:${u.port || '5432'}${u.pathname}`;
-    return { name: profile.name, url: u.toString(), rulesFile: profile.rulesFile, recipesPath: profile.recipesPath, display };
+    return { name: profile.name, url: u.toString(), rulesFile: profile.rulesFile, recipesPath: profile.recipesPath, scenariosPath: profile.scenariosPath, display };
   } catch {
     return { ...profile, display };
   }

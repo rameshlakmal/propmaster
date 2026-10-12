@@ -25,6 +25,7 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'propmaster-ui-'));
   process.env.PROPMASTER_UI_CONFIG = join(dir, 'ui.json');
   process.env.PROPMASTER_HOME = join(dir, 'home');
+  process.env.PROPMASTER_BACKUPS = join(dir, 'backups');
   db = await connectTest();
   await resetDatabase(db);
   app = await startUiServer(0);
@@ -36,6 +37,7 @@ afterAll(async () => {
   await db?.end();
   delete process.env.PROPMASTER_UI_CONFIG;
   delete process.env.PROPMASTER_HOME;
+  delete process.env.PROPMASTER_BACKUPS;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -255,6 +257,77 @@ describe('finding data through the web app', () => {
     expect((await call('POST', '/api/find', { recipe: 'product-low-on-stock', params: { max_stock: 'lots' } })).data.error.message).toBe(':max_stock must be a whole number, not "lots".');
     expect((await call('POST', '/api/find', { recipe: 'product-low-on-stock', params: ['x'] })).data.error.message).toBe('"params" must be an object.');
     expect((await call('POST', '/api/find/claim', { recipe: 'product-low-on-stock', duration: 'forever' })).data.error.message).toBe('"forever" is not a duration.');
+  });
+});
+
+describe('seeding and cleaning through the web app', () => {
+  const demo = join(process.cwd(), 'demo', 'scenarios');
+
+  it('asks for a scenario folder first, then lists and checks the scenarios', async () => {
+    expect((await call('GET', '/api/scenarios')).data).toEqual({ path: '', scenarios: [], error: null });
+    expect((await call('POST', '/api/seed', { scenario: 'x' })).data.error.message).toBe('Choose a scenario folder first.');
+    expect((await call('PUT', '/api/scenarios', { path: `"${demo}"` })).data).toEqual({ ok: true, path: demo });
+    const { scenarios } = (await call('GET', '/api/scenarios')).data;
+    expect(scenarios.map((s: { id: string }) => s.id)).toEqual(['low-stock-product', 'new-customer', 'two-orders', 'underpaid-order']);
+    expect(scenarios[2]).toEqual({
+      id: 'two-orders', name: 'Customer with two orders', description: expect.any(String), tags: ['orders', 'customers'],
+      params: [{ name: 'status', type: 'text', default: 'PAID', description: 'Status of the first order' }], file: 'two-orders.yml', tables: ['customers'],
+    });
+    const { results } = (await call('POST', '/api/scenarios/check')).data;
+    expect(results.map((r: { status: string }) => r.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
+  });
+
+  it('seeds (or dry-runs) a scenario, lists the run, previews the clean and does it', async () => {
+    await call('PUT', '/api/claimer', { name: 'ana' });
+    const dry = (await call('POST', '/api/seed', { scenario: 'two-orders', dryRun: true, params: { status: 'PENDING' } })).data;
+    expect(dry).toMatchObject({ runId: null, dryRun: true, params: { status: 'PENDING' } });
+    expect(dry.rows).toHaveLength(9);
+
+    const r = (await call('POST', '/api/seed', { scenario: 'two-orders', note: 'TC-9' })).data;
+    expect(r.runId).toMatch(/^\d+$/);
+    const runs = (await call('GET', '/api/runs')).data;
+    expect(runs).toMatchObject({ me: 'ana', runs: [{ id: r.runId, scenario: 'Customer with two orders', createdBy: 'ana', note: 'TC-9', rows: 9 }] });
+
+    const preview = (await call('POST', '/api/clean', { runIds: [r.runId] })).data;
+    expect(preview).toMatchObject({ applied: false, backup: null, plan: { kind: 'run', title: `Run #${r.runId} · Customer with two orders` } });
+    expect(preview.plan.actions).toHaveLength(9);
+    const done = (await call('POST', '/api/clean', { runIds: [r.runId], apply: true })).data;
+    expect(done.applied).toBe(true);
+    expect((await call('GET', '/api/runs')).data.runs).toEqual([]);
+
+    // The backup is listed for this database, and restoring it is previewed first.
+    const { backups } = (await call('GET', '/api/backups')).data;
+    expect(backups[0]).toMatchObject({ file: done.backup, changes: 9 });
+    expect((await call('POST', '/api/restore', { file: done.backup })).data.plan.actions).toHaveLength(9);
+    expect((await call('POST', '/api/restore', { file: done.backup, apply: true })).data.applied).toBe(true);
+    // Only files from the backup folder can be named.
+    expect((await call('POST', '/api/restore', { file: join(dir, '..', 'elsewhere.json') })).data.error.message).toMatch(/^Can't find the backup .*elsewhere\.json\.$/);
+    await call('PUT', '/api/claimer', { name: '' });
+  });
+
+  it('undoes a recorded session', async () => {
+    await call('POST', '/api/record/start', { name: 'Web undo' });
+    await db.query("UPDATE customers SET name = 'Changed' WHERE id = 2");
+    const stopped = (await call('POST', '/api/record/stop')).data;
+    const preview = (await call('POST', '/api/clean', { sessionId: stopped.id })).data;
+    expect(preview.plan.actions).toMatchObject([{ op: 'update', table: 'public.customers', key: { id: 2 }, set: { name: 'Bob Checker' } }]);
+    await call('POST', '/api/clean', { sessionId: stopped.id, apply: true });
+    expect((await db.query('SELECT name FROM customers WHERE id = 2')).rows[0].name).toBe('Bob Checker');
+  });
+
+  it('creates data for a recipe that finds none', async () => {
+    const r = (await call('POST', '/api/find/seed', { recipe: 'order-whose-payment-doesn-t-match-its-total' })).data;
+    expect(r.seeded).toMatchObject({ scenario: 'Underpaid order', rows: 4 });
+    expect(r.result.rows).toHaveLength(1);
+    expect((await call('POST', '/api/find/seed', { recipe: 'product-in-a-price-range' })).data.error.message).toBe('"Product in a price range" doesn\'t say how to create its data.');
+  });
+
+  it('rejects bad input clearly', async () => {
+    expect((await call('POST', '/api/seed', { scenario: 'nope' })).data.error.message).toMatch(/^There is no scenario "nope"/);
+    expect((await call('POST', '/api/seed', { scenario: 'low-stock-product', params: { stock: 'few' } })).data.error.message).toBe(':stock must be a whole number, not "few".');
+    expect((await call('POST', '/api/clean', {})).data.error.message).toBe('Nothing to clean.');
+    expect((await call('POST', '/api/clean', { runIds: '7' })).data.error.message).toBe('"runIds" must be a list of run ids.');
+    expect((await call('POST', '/api/clean', { runIds: ['999'] })).data.error.message).toBe('There is no seed run #999.');
   });
 });
 

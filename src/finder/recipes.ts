@@ -8,6 +8,7 @@
 //   -- tags: customers, checkout
 //   -- param: since date = 2024-01-01 | Signed up on or after this date
 //   -- claim: customers                              (or: customers via customer_id)
+//   -- seed: new-customer                            (the scenario that creates such data: find --seed)
 //   SELECT c.id, c.email FROM customers c WHERE ... AND c.created_at >= :since
 //
 // :since is a parameter. It is sent to Postgres as a bind value ($1::date), never pasted into the SQL.
@@ -42,6 +43,8 @@ export interface Recipe {
   tags: string[];
   params: Param[];
   claim?: Claim;
+  /** The seed scenario that creates data this recipe finds, for when nothing is free (find --seed). */
+  seed?: string;
   sql: string;
   file: string;
   /** Line of the "-- recipe:" header, for error messages. */
@@ -49,7 +52,7 @@ export interface Recipe {
 }
 
 const HEADER = /^\s*--\s*recipe:\s*(.+?)\s*$/i;
-const DIRECTIVE = /^\s*--\s*(tags|param|claim):\s*(.*?)\s*$/i;
+const DIRECTIVE = /^\s*--\s*(tags|param|claim|seed):\s*(.*?)\s*$/i;
 const PARAM = /^([a-z_][a-z0-9_]*)\s+([a-z]+)(?:\s*=\s*('(?:[^']|'')*'|[^|]*?))?(?:\s*\|\s*(.*))?$/i;
 const CLAIM = /^((?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?:\.(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*))?)(?:\s+via\s+([a-z_][a-z0-9_$]*))?$/i;
 
@@ -84,6 +87,10 @@ export function parseRecipes(text: string, file = 'recipe file'): Recipe[] {
         recipe.tags.push(...value.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean));
       } else if (kind.toLowerCase() === 'param') {
         recipe.params.push(parseParam(value, `${file}, line ${n}`));
+      } else if (kind.toLowerCase() === 'seed') {
+        if (recipe.seed) throw new UserError(`${file}, line ${n}: recipe "${current.name}" has more than one "-- seed:" line.`);
+        if (!value) throw new UserError(`${file}, line ${n}: "-- seed:" needs a scenario, e.g. -- seed: two-orders`);
+        recipe.seed = value;
       } else {
         if (recipe.claim) throw new UserError(`${file}, line ${n}: recipe "${current.name}" has more than one "-- claim:" line.`);
         const m = CLAIM.exec(value);

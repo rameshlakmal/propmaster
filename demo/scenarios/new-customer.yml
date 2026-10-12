@@ -1,0 +1,8 @@
+# A shopper who has signed up but never ordered.
+name: New customer
+description: A customer with no orders, for first-purchase and empty-history tests.
+tags: [customers, new-user]
+
+seed:
+  customers:
+    name: New Shopper {{n}}

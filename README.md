@@ -6,6 +6,8 @@ Propmaster is a test-data toolkit for QA engineers, built on PostgreSQL. Tool 1,
 
 Tool 2, the **[Test Data Finder](#find-test-data-tool-2)**, finds the data a test needs ("a customer who has never ordered") with shared SQL recipes, and lets you claim a row so nobody else on the test database uses it while you test.
 
+Tool 3, the **[Seeder & Cleaner](#seed-and-clean-up-tool-3)**, creates the rows a test needs from a short YAML scenario, linked correctly, and removes exactly those rows afterwards. It can also undo everything the app changed during a recorded session.
+
 > "I clicked **Place Order** and the screen said 'Success'. But did it create the payment row? Did it reduce the stock? Did it change something else?"
 
 ![Propmaster demo](demo/gif/propmaster-demo.gif)
@@ -82,6 +84,7 @@ npm run ui           # opens Propmaster in your browser
    - **Flag** a step when something looks wrong, with a note. Flags show in the timeline and in every export.
 3. **Sessions:** the list is paged (20 a page); tick sessions to delete several at once, or use the bin on a row. Open any recording to rename a step (the pencil next to its name), search it, filter by table or operation, and export it (HTML, Markdown, SQL checks). Each change is laid out as labelled fields: the new values of an insert, *old → new* for an update, and what a deleted row held, with text unquoted and times in your local format. JSON keeps its structure: indented, and for an update the paths that changed (`[0].goodsWeight 1000 → 500`), with the full JSON before and after one click away. Click a change for every column, exactly as stored.
 4. **Rules:** open your rules file, edit it, and run it against a session.
+5. **Find data** and **Seed & clean:** see [Tool 2](#find-test-data-tool-2) and [Tool 3](#seed-and-clean-up-tool-3).
 
 ![Recording live in the web app](docs/images/web-app-recording.png)
 
@@ -149,6 +152,11 @@ Not sure what your DB user is allowed to do? Run `propmaster doctor`.
 | `find [words]` | Lists recipes, or finds test data with one (`-p name=value`, `--claim`, `--json`). See [Find test data](#find-test-data-tool-2). |
 | `recipes check` | Checks every recipe still runs and finds rows, e.g. in CI after a migration. |
 | `claims` / `claims add`, `extend`, `release` | Who is using which rows, and giving them back. |
+| `seed [words]` | Lists scenarios, or seeds one (`-p name=value`, `--dry-run`, `--note`, `--json`). See [Seed and clean up](#seed-and-clean-up-tool-3). |
+| `scenarios check` | Seeds every scenario and rolls back, e.g. in CI after a migration. |
+| `runs` | Seed runs that still have data (`--all`, `--mine`). |
+| `clean --run <ids>` / `--mine` / `--session <id>` | Previews deleting a run's rows or undoing a recorded session; `--apply` does it (`--include-dependents`, `--force`). |
+| `restore [backup]` | Lists backups, or previews putting back what a clean changed; `--apply` does it. |
 
 **Filters** work with `show`, `stop` and `export`:
 `--table orders,order_*,billing.*` · `--except-table` · `--user` · `--app` · `--op insert,update` · `--since 15m` · `--until 10:30` · `--step 2,3`
@@ -314,6 +322,58 @@ Claim for longer than the test can run: if the claim runs out and someone else t
 
 [demo/recipes/shop.sql](demo/recipes/shop.sql) has six example recipes for the demo shop.
 
+## Seed and clean up (Tool 3)
+
+> "The QA database has 40,000 users named 'test test'. Nobody knows which ones are safe to delete, so nobody deletes anything."
+
+The **Seeder & Cleaner** creates exactly the rows a test needs from a **scenario**, and tracks every row it creates, so it can remove exactly those rows afterwards, on a shared test database. Together with the Recorder it also **undoes what the app changed** during a recorded session.
+
+A scenario is a YAML file kept in git next to your tests. Write the rows you care about; Propmaster fills in the rest:
+
+```yaml
+# scenarios/two-orders.yml
+name: Customer with two orders
+params:
+  status: { type: text, default: PAID }
+seed:
+  customers:
+    name: Pat Two-Orders          # email is required and unique: one is made up
+    orders:                       # child rows, linked through orders.customer_id
+      - status: "{{status}}"
+        total: 49.50
+        order_items: 2            # two items, each with a new product (product_id is required)
+        payments: { amount: 49.50, method: CARD }
+      - status: CANCELLED
+        total: 12.50
+        order_items: { product_id: 1, qty: 1, unit_price: 12.50 }   # an existing product
+```
+
+```
+$ propmaster seed two-orders
+ ✔ Created customers: 1, orders: 2, products: 2, order_items: 3, payments: 1 · run #42
+   → when you are done: propmaster clean --run 42   (a preview; add --apply to delete)
+
+$ propmaster clean --run 42
+  ...every row it would delete, children first, and anything that needs a second look...
+ ! 3 rows that were not created by it point at rows being deleted. Deleting them needs --include-dependents.
+
+$ propmaster clean --run 42 --apply --include-dependents
+ ✔ Backup: ~/.propmaster/backups/2026-10-13T09-12-04-run-42-customer-with-two-orders.json
+   → to undo this clean: propmaster restore "<that file>" --apply
+```
+
+- **Scenarios.** Under `seed:`, each key is a table and its value is one row, a list of rows, or a number of rows. Inside a row, a key is a column, or a child table linked by its foreign key. `$count: 5` makes copies, `$as: pat` names a row and `{ $ref: pat }` points at it, `$via: column` picks the foreign key when there are several. Text can use `{{param}}`, `{{run}}`, `{{n}}` (the row's number) and `{{unique}}`.
+- **Made-up values.** Columns you leave out are left to their defaults, or NULL when nullable. A required foreign key gets a new parent row. Other required columns get a value that passes their constraints: the first value a `CHECK (… IN (…))` or enum allows, a number inside `CHECK` bounds, a unique token for unique columns, and realistic-looking names, emails, phones and cities. A unique clash is retried with a new value.
+- **Tracked.** Every row is listed in `_propmaster.seeded_rows` by primary key, in the same transaction as the insert: a seed either fully happens and is tracked, or nothing changes. `--dry-run` inserts everything, shows it and rolls back.
+- **Safe cleanup.** `clean` deletes only the run's rows, by primary key, children first, in one transaction. Without `--apply` it only shows the plan, marking rows the test changed since seeding and rows already gone. Rows the run didn't create that point at its rows (an order the app created for a seeded customer, `ON DELETE CASCADE` children too) are never deleted unless you add `--include-dependents`. Rows another tester has claimed need `--force`. Everything deleted is written to a **backup** first; `propmaster restore <file>` puts it back, and only into the database it came from.
+- **Undo a recorded session.** `propmaster clean --session 12` walks the session's changes newest first: rows the app inserted are deleted, updated columns are set back, deleted rows are inserted again. Each happens only if the row still looks as the recording left it, so a later change by someone else is never overwritten; it is listed as a conflict instead. `clean --session 12 --run 42` undoes the session and deletes the run's rows in one go.
+- **No match? Create one.** A recipe can name the scenario that creates its data with `-- seed: two-orders`. `propmaster find "<recipe>" --seed --claim` seeds it when nothing is free, finds again and claims the new row.
+- **CI.** `propmaster scenarios check` seeds every scenario in a transaction that is rolled back, and fails when a migration broke one.
+
+**In the web app**, the **Seed & clean** page lists and searches scenarios, fills in their parameters, seeds or dry-runs them, and shows the rows created. Runs, the clean preview (with checkboxes for dependents and claimed rows), session undo and backups are on the same page. A session's page has **Undo changes…**, and the **Find data** page offers **Create one** when a recipe that names a scenario finds nothing.
+
+[demo/scenarios](demo/scenarios) has four example scenarios for the demo shop, and the design notes are in [docs/SEEDER.md](docs/SEEDER.md).
+
 ## How it works
 
 All of trigger mode is in [`sql/recorder.sql`](sql/recorder.sql).
@@ -328,7 +388,9 @@ All of trigger mode is in [`sql/recorder.sql`](sql/recorder.sql).
 - **Partitions and inheritance** are recorded under the table the statement named, never twice.
 - **New tables** are picked up on every `start` and `step`.
 
-SQL shown off: PL/pgSQL triggers, transition tables, JSONB, `pg_catalog` introspection, dynamic SQL with `format('%I')`, `REPEATABLE READ` snapshots, jsonb containment, and lock timeouts.
+The Seeder & Cleaner reads the schema from `pg_catalog` (columns, keys, foreign keys, enums, and `pg_get_constraintdef` for checks), inserts each row inside a `SAVEPOINT` so a unique clash can be retried, and cleans in one transaction that locks its rows with `FOR UPDATE`. Rows that point at rows being deleted are found by following foreign keys level by level. Undo writes rows back with `jsonb_populate_record` and `OVERRIDING SYSTEM VALUE`, so identity columns and exact types come back as they were.
+
+SQL shown off: PL/pgSQL triggers, transition tables, JSONB, `pg_catalog` introspection, dynamic SQL with `format('%I')`, `REPEATABLE READ` snapshots, jsonb containment, savepoints, row locks, and lock timeouts.
 
 ## Performance
 
@@ -350,7 +412,8 @@ Docker Desktop's network latency swings a lot, so the in-database numbers are th
 
 - Hosts and databases named like production (`prod`, `production` as a word: `app_prod`, `prod-db`) are refused.
 - Attaching triggers waits at most 5 seconds for table locks, then fails with a clear message instead of queueing behind a migration.
-- Everything lives in the `_propmaster` schema; `propmaster uninstall` removes it all, recordings and claims included.
+- Everything lives in the `_propmaster` schema; `propmaster uninstall` removes it all, recordings, claims and seed-run tracking included. It never deletes seeded rows: clean runs first.
+- Cleanup only touches rows it tracked or recorded, by primary key; it previews by default, runs in one transaction, and writes a backup before deleting.
 - Rules and recipes run read-only, with a time limit.
 - Passwords stay in environment variables or `.env` (git-ignored), never in exported files.
 
@@ -368,7 +431,7 @@ The [test plan](docs/TEST_PLAN.md) covers the risks, test levels and exit criter
 
 ## Roadmap
 
-Tool 1: DB Change Recorder ✔ → Tool 2: Test Data Finder ✔ → **Tool 3: Seeder & Cleaner** (scenario seeding, safe cleanup, and undo of a recorded session; it will also create the data when a recipe finds none) → a Chrome side panel that marks test steps as you click.
+Tool 1: DB Change Recorder ✔ → Tool 2: Test Data Finder ✔ → Tool 3: Seeder & Cleaner ✔ → a Chrome side panel that marks test steps as you click.
 
 ## License
 

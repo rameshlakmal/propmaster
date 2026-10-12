@@ -26,6 +26,11 @@ import * as claims from './finder/claims.js';
 import { checkRecipes, claimFound, find } from './finder/find.js';
 import { loadRecipes, pickRecipe, resolveRecipesPath } from './finder/recipes.js';
 import { formatChecks, formatClaims, formatFindResult, formatRecipeList, until } from './finder/report.js';
+import { backupDir, clean, listBackups, type Target } from './seeder/clean.js';
+import { formatBackups, formatCleanResult, formatRuns, formatScenarioChecks, formatScenarioList, formatSeedResult } from './seeder/report.js';
+import * as runs from './seeder/runs.js';
+import { loadScenarios, pickScenario, resolveScenariosPath } from './seeder/scenarios.js';
+import { checkScenarios, seed, type SeedResult } from './seeder/seed.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -141,19 +146,22 @@ program
 
 program
   .command('uninstall')
-  .description('Remove Propmaster from the database: the recorder, its triggers, all recordings and claims')
+  .description('Remove Propmaster from the database: the recorder, its triggers, recordings, claims and seed-run tracking')
   .option('-y, --yes', 'skip the confirmation prompt')
   .action(run(async ({ db }, opts: { yes?: boolean }) => {
-    if (!(await trigger.isInstalled(db)) && !(await claims.claimsExist(db))) {
+    if (!(await trigger.isInstalled(db)) && !(await claims.claimsExist(db)) && !(await runs.runsExist(db))) {
       say(` ${i.idle} Propmaster is not installed. Nothing to remove.`);
       return;
     }
+    // Seeded rows stay in the database after uninstalling, untracked: say so while they can still be cleaned.
+    const withData = (await runs.list(db, { limit: 1000 })).length;
+    if (withData) say(` ${i.warn} ${c.yellow(`${withData} seed run${withData === 1 ? ' still has' : 's still have'} data. Uninstalling keeps those rows but forgets them, so \`propmaster clean\` can't remove them later.`)}`, hint(c, 'clean them first: propmaster runs, then propmaster clean --run <id> --apply'));
     if (!opts.yes && !(await confirm('uninstall'))) {
       say(` ${i.warn} Cancelled. Nothing was removed.`, hint(c, 'in scripts, add --yes'));
       return;
     }
     await trigger.uninstall(db);
-    say(` ${i.ok} Propmaster removed ${c.dim('· the _propmaster schema, its triggers, recordings and claims are gone')}`);
+    say(` ${i.ok} Propmaster removed ${c.dim('· the _propmaster schema, its triggers, recordings, claims and seed-run tracking are gone')}`);
   }));
 
 program
@@ -455,6 +463,8 @@ interface FindOpts {
   note?: string;
   timeout: string;
   json?: boolean;
+  seed?: boolean;
+  scenarios?: string;
 }
 
 program
@@ -470,6 +480,8 @@ program
   .option('--note <text>', 'a note on the claim, e.g. the test it is for')
   .option('--timeout <interval>', 'time limit for the query', '30s')
   .option('--json', 'print the result as JSON, for scripts and automated tests')
+  .option('--seed', 'when not enough rows are free, create them with the scenario named in the recipe ("-- seed:" line)')
+  .addOption(new Option('--scenarios <path>', 'with --seed: scenario folder (default: $PROPMASTER_SCENARIOS, or ./scenarios)'))
   .action(async (words: string[], opts: FindOpts) => {
     if (words.length === 0) {
       await listRecipes(opts.recipes);
@@ -491,7 +503,24 @@ async function findData(words: string[], opts: FindOpts): Promise<void> {
   const count = claimCount(opts.claim);
   const seconds = claims.parseDuration(opts.for);
   await run(async ({ db }) => {
-    const result = await find(db, recipe, { params: opts.param, limit: Math.max(opts.limit, count ?? 0), timeout: opts.timeout });
+    const options = { params: opts.param, limit: Math.max(opts.limit, count ?? 0), timeout: opts.timeout };
+    let result = await find(db, recipe, options);
+    // --seed: make the missing rows with the recipe's scenario, one run each, then find again.
+    const seeded: SeedResult[] = [];
+    const free = () => result.rows.filter((r) => !r.claimedBy).length;
+    if (opts.seed && free() < (count ?? 1)) {
+      if (!recipe.seed) throw new UserError(`"${recipe.name}" doesn't say how to create its data.`, `Add a line to the recipe naming a seed scenario, e.g. -- seed: two-orders`);
+      const scenario = pickScenario(await loadScenarios(resolveScenariosPath(opts.scenarios)), recipe.seed);
+      for (let n = free(); n < (count ?? 1) && seeded.length < 20; n++) {
+        seeded.push(await seed(db, scenario, { by: claimer(opts.as), note: `for recipe "${recipe.name}"` }));
+      }
+      result = await find(db, recipe, options);
+      if (!opts.json) {
+        for (const r of seeded) say(` ${i.ok} Seeded ${c.bold(scenario.name)} ${c.dim(`· run #${r.runId} · ${r.rows.length} rows · clean up with: propmaster clean --run ${r.runId} --apply`)}`);
+        if (free() === 0) say(` ${i.warn} ${c.yellow(`The rows "${scenario.name}" created don't match "${recipe.name}".`)} ${c.dim('Check the scenario against the recipe.')}`);
+        say('');
+      }
+    }
     const got = count ? await claimFound(db, result, { count, by: claimer(opts.as), note: opts.note, seconds }) : [];
     if (opts.json) {
       const taken = new Set(got.map((g) => g.key));
@@ -502,6 +531,7 @@ async function findData(words: string[], opts: FindOpts): Promise<void> {
         moreMatches: result.moreMatches,
         claimedByOthers: result.claimed,
         requested: count ?? 0,
+        ...(seeded.length ? { seeded: seeded.map((r) => ({ runId: r.runId, scenario: r.scenario.id, rows: r.rows.length })) } : {}),
         claims: got.map((g) => ({ id: g.id, table: g.table, key: g.key, expiresAt: g.expiresAt, row: result.rows.find((r) => r.key === g.key)?.values ?? null })),
         rows: result.rows.filter((r) => !r.claimedBy && !(r.key !== null && taken.has(r.key))).map((r) => r.values),
       }, null, 2));
@@ -600,6 +630,166 @@ claimsCmd
     const n = await claims.clearExpired(db);
     say(` ${i.ok} Deleted ${n} expired claim${n === 1 ? '' : 's'}`);
   }));
+
+// ---------- seed and clean (Seeder & Cleaner) ----------
+
+const scenariosOption = () => new Option('--scenarios <path>', 'scenario folder or .yml file (default: $PROPMASTER_SCENARIOS, or ./scenarios)');
+
+async function listScenarios(path?: string): Promise<void> {
+  const where = resolveScenariosPath(path);
+  console.log(formatScenarioList(await loadScenarios(where), where));
+}
+
+/** With --json, errors are printed as JSON ({ "error": ..., "hint": ... }) for scripts that read stdout. */
+async function asJson(json: boolean | undefined, fn: () => Promise<void>): Promise<void> {
+  if (!json) return fn();
+  try {
+    await fn();
+  } catch (err) {
+    const e = explainError(err);
+    console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), hint: e instanceof UserError ? e.hint ?? null : null }, null, 2));
+    process.exitCode = 1;
+  }
+}
+
+interface SeedOpts {
+  scenarios?: string;
+  param: Record<string, string>;
+  dryRun?: boolean;
+  as?: string;
+  note?: string;
+  json?: boolean;
+}
+
+program
+  .command('seed')
+  .argument('[scenario...]', 'a scenario id, its name, or words from it (none: list all scenarios)')
+  .description('Create the rows a test needs from a scenario; every row is tracked so `clean` can remove it')
+  .addOption(scenariosOption())
+  .option('-p, --param <name=value>', 'a parameter value (repeatable)', param, {})
+  .option('--dry-run', 'create everything and show it, then roll back: nothing is saved')
+  .option('--as <name>', 'who is seeding (default: $PROPMASTER_USER, or your OS user name)')
+  .option('--note <text>', 'a note on the run, e.g. the test it is for')
+  .option('--json', 'print the result as JSON, for scripts and automated tests')
+  .action(async (words: string[], opts: SeedOpts) => {
+    if (words.length === 0) {
+      await listScenarios(opts.scenarios);
+      return;
+    }
+    await asJson(opts.json, async () => {
+      const scenario = pickScenario(await loadScenarios(resolveScenariosPath(opts.scenarios)), words.join(' '));
+      await run(async ({ db }) => {
+        const r = await seed(db, scenario, { params: opts.param, dryRun: opts.dryRun, by: claimer(opts.as), note: opts.note });
+        if (!opts.json) {
+          console.log(formatSeedResult(r));
+          return;
+        }
+        const named = Object.fromEntries(r.rows.filter((x) => x.alias).map((x) => [x.alias!, x.values]));
+        console.log(JSON.stringify({
+          runId: r.runId, dryRun: r.dryRun, scenario: r.scenario, params: r.params, named,
+          rows: r.rows.map((x) => ({ table: x.table, key: x.key, values: x.values, ...(x.alias ? { as: x.alias } : {}), ...(x.auto ? { auto: true } : {}) })),
+        }, null, 2));
+      })();
+    });
+  });
+
+const scenariosCmd = program.command('scenarios').description('List and check seed scenarios');
+
+scenariosCmd
+  .command('list', { isDefault: true })
+  .description('List the scenarios (the same as `propmaster seed` without a scenario)')
+  .addOption(scenariosOption())
+  .action((opts: { scenarios?: string }) => listScenarios(opts.scenarios));
+
+scenariosCmd
+  .command('check')
+  .description('Seed every scenario and roll back, e.g. in CI after a migration (exit code 1 if one is broken)')
+  .addOption(scenariosOption())
+  .action(async (opts: { scenarios?: string }) => {
+    const where = resolveScenariosPath(opts.scenarios);
+    const all = await loadScenarios(where);
+    await run(async ({ db }) => {
+      say(` ${brand(c)}  ${c.bold('Scenario check')}`, ` ${c.dim(`${all.length} scenario${all.length === 1 ? '' : 's'} from ${where}`)}`, '');
+      const results = await checkScenarios(db, all);
+      console.log(formatScenarioChecks(results));
+      if (results.some((r) => r.status === 'error')) process.exitCode = 1;
+    })();
+  });
+
+program
+  .command('runs')
+  .description('List seed runs that still have data (--all: cleaned ones too)')
+  .option('--all', 'include runs that have been cleaned')
+  .option('--mine', 'only your runs')
+  .option('--as <name>', 'who "you" are (default: $PROPMASTER_USER, or your OS user name)')
+  .action(run(async ({ db }, opts: { all?: boolean; mine?: boolean; as?: string }) => {
+    const me = claimer(opts.as);
+    console.log(formatRuns(await runs.list(db, { includeCleaned: opts.all, by: opts.mine ? me : undefined }), me, { all: opts.all }));
+  }));
+
+interface CleanOpts {
+  run?: string[];
+  session?: string;
+  mine?: boolean;
+  apply?: boolean;
+  includeDependents?: boolean;
+  force?: boolean;
+  as?: string;
+  json?: boolean;
+}
+
+program
+  .command('clean')
+  .description('Delete what a seed run created, or undo what a recorded session changed (a preview unless --apply)')
+  .option('--run <ids>', 'seed runs to clean, e.g. 42 or 42,43 (see `propmaster runs`)', list)
+  .option('--session <id>', 'a recorded session to undo: its inserts are deleted, updates set back, deletes put back')
+  .option('--mine', 'every run of yours that still has data')
+  .option('--apply', 'do it (without it, only a preview)')
+  .option('--include-dependents', 'also delete rows it did not create that point at rows being deleted')
+  .option('--force', 'also change rows another tester has claimed')
+  .option('--as <name>', 'who is cleaning (default: $PROPMASTER_USER, or your OS user name)')
+  .option('--json', 'print the plan (or what was done) as JSON')
+  .action((opts: CleanOpts) => asJson(opts.json, () => run(async (ctx) => {
+    const me = claimer(opts.as);
+    const runIds = (opts.run ?? []).map((r) => r.replace(/^#/, ''));
+    if (opts.mine) runIds.push(...(await runs.list(ctx.db, { by: me })).map((r) => r.id).filter((id) => !runIds.includes(id)));
+    const targets: Target[] = [];
+    if (opts.session) targets.push({ kind: 'session', recording: await loadRecording(ctx, opts.session) });
+    if (runIds.length) targets.push({ kind: 'run', runIds });
+    if (!targets.length) {
+      if (opts.mine) {
+        say(` ${i.idle} You have no runs with data left to clean.`);
+        return;
+      }
+      throw new UserError('What should be cleaned?', 'Give a seed run (--run 42, see `propmaster runs`), your runs (--mine), or a recorded session to undo (--session 12).');
+    }
+    const result = await clean(ctx.db, targets, { apply: opts.apply, includeDependents: opts.includeDependents, force: opts.force, by: me, identity: ctx.identity });
+    if (opts.json) {
+      console.log(JSON.stringify({ applied: result.applied, backup: result.backup, ...result.plan }, null, 2));
+      return;
+    }
+    const command = ['propmaster clean', opts.session ? `--session ${opts.session}` : '', runIds.length ? `--run ${runIds.join(',')}` : ''].filter(Boolean).join(' ');
+    console.log(formatCleanResult(result, { command }));
+  })()));
+
+program
+  .command('restore')
+  .argument('[backup]', 'a backup file written by `clean --apply` (none: list the backups)')
+  .description('Put back what a clean changed, from its backup (a preview unless --apply)')
+  .option('--apply', 'do it (without it, only a preview)')
+  .option('--include-dependents', 'also delete rows created since that point at rows the clean had put back')
+  .option('--force', 'also change rows another tester has claimed')
+  .option('--as <name>', 'who is restoring (default: $PROPMASTER_USER, or your OS user name)')
+  .action(async (file: string | undefined, opts: { apply?: boolean; includeDependents?: boolean; force?: boolean; as?: string }) => {
+    if (!file) {
+      console.log(formatBackups(await listBackups(), backupDir()));
+      return;
+    }
+    await run(async (ctx) => {
+      const result = await clean(ctx.db, { kind: 'restore', file }, { apply: opts.apply, includeDependents: opts.includeDependents, force: opts.force, by: claimer(opts.as), identity: ctx.identity });
+      console.log(formatCleanResult(result, { command: `propmaster restore "${file}"` }));
+    })();
+  });
 
 program
   .command('ui')

@@ -1,5 +1,5 @@
 import { AlertDialog, Badge, Box, Button, Card, Checkbox, DropdownMenu, Flex, Heading, IconButton, Select, Switch, Table, Text, TextField } from '@radix-ui/themes';
-import { ArrowLeft, CaretLeft, CaretRight, DownloadSimple, ListChecks, MagnifyingGlass, Rows, Trash } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, ArrowLeft, CaretLeft, CaretRight, DownloadSimple, ListChecks, MagnifyingGlass, Rows, Trash } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, downloadExport } from '../api';
 import { EmptyState, ErrorCallout, PageHeader, RetryButton, TimelineSkeleton } from '../components/Feedback';
@@ -231,6 +231,9 @@ function SessionDetail({ id }: { id: string }) {
         description={`Session #${rec.id} on ${rec.database}, ${formatWhen(rec.startedAt)}${rec.mode === 'snapshot' ? ', snapshot mode' : ''}`}
         actions={<>
           <Button variant="soft" onClick={checkRules}><ListChecks /> Check rules</Button>
+          <Button variant="soft" color="gray" disabled={!rec.stoppedAt} onClick={() => { location.hash = `seed/${rec.id}`; }} title="Preview putting the database back to how it was before this session">
+            <ArrowCounterClockwise /> Undo changes…
+          </Button>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
               <Button variant="soft"><DownloadSimple /> Export <DropdownMenu.TriggerIcon /></Button>

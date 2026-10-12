@@ -11,6 +11,7 @@ export interface Profile {
   display: string;
   rulesFile?: string;
   recipesPath?: string;
+  scenariosPath?: string;
 }
 
 export interface Config {
@@ -152,6 +153,7 @@ export interface Recipe {
   tags: string[];
   params: RecipeParam[];
   claim?: { table: string; via?: string };
+  seed?: string;
   sql: string;
   file: string;
   line: number;
@@ -182,7 +184,7 @@ export interface FoundRow {
 }
 
 export interface FindResult {
-  recipe: { id: string; name: string; file: string; line: number };
+  recipe: { id: string; name: string; file: string; line: number; seed?: string };
   params: Record<string, string>;
   columns: string[];
   rows: FoundRow[];
@@ -201,4 +203,101 @@ export interface RecipeCheck {
   matches: number | null;
   ms: number;
   error?: string;
+}
+
+// ---------- Seeder & Cleaner ----------
+
+export interface Scenario {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  params: RecipeParam[];
+  file: string;
+  /** The tables written at the top of its seed: section. */
+  tables: string[];
+}
+
+export interface ScenariosSource {
+  path: string;
+  scenarios: Scenario[];
+  error: string | null;
+}
+
+export type Row = Record<string, unknown>;
+
+export interface CreatedRow {
+  seq: number;
+  table: string;
+  key: Row;
+  values: Row;
+  alias?: string;
+  auto: boolean;
+}
+
+export interface SeedResult {
+  scenario: { id: string; name: string; file: string };
+  params: Record<string, string>;
+  runId: string | null;
+  dryRun: boolean;
+  rows: CreatedRow[];
+  ms: number;
+}
+
+export interface ScenarioCheck {
+  scenario: { id: string; name: string; file: string };
+  status: 'ok' | 'skipped' | 'error';
+  rows: number;
+  ms: number;
+  error?: string;
+}
+
+export interface Run {
+  id: string;
+  scenario: string;
+  file: string | null;
+  params: Record<string, string>;
+  createdBy: string;
+  note: string | null;
+  createdAt: string;
+  cleanedAt: string | null;
+  cleanedBy: string | null;
+  rows: number;
+  tables: Record<string, number>;
+}
+
+export interface Diff {
+  column: string;
+  from: unknown;
+  to: unknown;
+}
+
+export type CleanAction =
+  | { op: 'delete'; table: string; key: Row; row: Row; why: 'seeded' | 'inserted'; changed: Diff[] }
+  | { op: 'delete'; table: string; key: Row; row: Row; why: 'dependent'; via: string; depth: number }
+  | { op: 'update'; table: string; key: Row; set: Row; current: Row; why: 'updated' }
+  | { op: 'insert'; table: string; key: Row; row: Row; why: 'deleted' };
+
+export interface CleanPlan {
+  kind: 'run' | 'session' | 'restore' | 'mixed';
+  title: string;
+  actions: CleanAction[];
+  skipped: { table: string; key: Row | null; reason: 'gone' | 'conflict' | 'no-key' | 'truncate'; detail: string }[];
+  claimed: { table: string; key: Row; claim: ClaimRow }[];
+  unkeyedDependents: { table: string; via: string; count: number }[];
+}
+
+export interface CleanResult {
+  plan: CleanPlan;
+  applied: boolean;
+  backup: string | null;
+  releasedClaims: number;
+}
+
+export interface BackupInfo {
+  file: string;
+  title: string;
+  database: string;
+  createdAt: string;
+  changes: number;
 }

@@ -1,4 +1,4 @@
-# Test plan: DB Change Recorder (v0.1) and Test Data Finder (v0.2)
+# Test plan: DB Change Recorder (v0.1), Test Data Finder (v0.2) and Seeder & Cleaner (v0.3)
 
 ## 1. What is tested, and why
 
@@ -15,7 +15,13 @@ The Test Data Finder runs testers' own SQL on a shared database and hands out ro
 4. **Two testers get the same row**, which is the very problem claiming exists to solve.
 5. **A recipe silently returns the wrong rows**: a parameter pasted wrongly, or a recipe broken by a migration that nobody notices.
 
-**In scope:** trigger mode, snapshot mode, the CLI, filters, masking, the HTML, Markdown and SQL exports, business rule checks, `doctor`, install, upgrade and uninstall. For the Finder: recipe files, parameters, finding, claims, `recipes check`, `--json`, and the Find data page.
+The Seeder & Cleaner writes to and deletes from a shared database. Its worst failures are:
+
+6. **Cleanup deletes data it doesn't own**: another tester's rows, or rows the app created that nobody asked to remove.
+7. **Undo overwrites a later change**, or leaves the database half cleaned.
+8. **A seed leaves rows behind that nobody tracks**, or fails halfway.
+
+**In scope:** trigger mode, snapshot mode, the CLI, filters, masking, the HTML, Markdown and SQL exports, business rule checks, `doctor`, install, upgrade and uninstall. For the Finder: recipe files, parameters, finding, claims, `recipes check`, `--json`, and the Find data page. For the Seeder & Cleaner: scenario files, made-up values, seeding, runs, cleanup, session undo, backups and restore, `scenarios check`, `find --seed`, and the Seed & clean page.
 **Out of scope for v0.1:** MySQL and other databases, the web dashboard and the Chrome side panel (later phases), and concurrent recording sessions (one session per database is a design limit).
 
 ## 2. Risks and how each one is covered
@@ -52,13 +58,19 @@ The Test Data Finder runs testers' own SQL on a shared database and hands out ro
 | R28 | A tester's stale claim id releases or extends a colleague's claim (after a takeover, or a typo) | Med · **High** | A taken-over claim gets a new id; another tester's live claim needs `--force` (in the web app, a second click) | `lets an expired claim be taken over` (old id is gone), `won't release or extend another tester's claim without force`, CLI and web app tests |
 | R29 | A recipe is silently misread: header lines after a blank line ignored, a trailing `; -- comment` or a second statement | Med · Med | The header runs to the first code line; the query ends at its `;` found by the SQL scanner; a second statement is refused when the file is read | Recipe unit tests (blank lines, `;` in strings and comments, two statements) |
 | R30 | Finding is slow on a big table because every match is counted | Med · Med | Counting stops at 1,000; enough rows are read to skip everyone's claims | `counts matches only up to 1000`, `still finds free rows when the first ones are claimed`; measured 2.6 s → ms on 3 million rows |
+| R31 | Cleanup deletes rows it didn't create | Low · **High** | Only tracked rows (or recorded changes) are touched, by primary key, never by a broad `WHERE`; rows that point at them need `--include-dependents`; claimed rows need `--force`; preview by default | `test/seeder.integration.test.ts`: `previews without changing anything…`, `leaves rows it didn't create alone…` (incl. `ON DELETE CASCADE`), `won't delete rows another tester claimed…`; CLI e2e refusal |
+| R32 | Seeding then cleaning doesn't leave the database as it was | Low · High | Rows deleted newest first; whole-table checksums compared | `seeding then cleaning every demo scenario leaves the database as it was` (property test over every scenario), checksum checks in the clean and undo tests |
+| R33 | Undo overwrites someone's later change | Med · **High** | Each undo step runs only if the row still holds what the recording left; otherwise a conflict, left alone; rows locked with `FOR UPDATE` while applying, and re-checked as they are changed | `puts the database back, leaving rows someone changed after the session alone`, TRUNCATE history conflict test, `restoring twice` test |
+| R34 | A clean or seed stops halfway | Low · High | One transaction each; tracking rows written in the same transaction as the inserts; any error rolls everything back | `explains mistakes, and a failed seed leaves nothing behind` (checksum and run list unchanged) |
+| R35 | Made-up values break constraints, or the seeder loops on cycles | Med · Med | Values from CHECK lists and bounds, enums, lengths, precision; unique tokens and next-free integers; retry on a unique clash; nullable links left NULL; required cycles explained | `allowedValues` / `generateValue` unit tests; `makes up values that pass checks, enums, lengths and unique constraints`; self-reference and cycle test |
+| R36 | A backup can't put back what was deleted, or is restored into the wrong database | Low · High | Backups store full rows with exact numbers and the database identity; restore is itself undoable | `writes a backup that puts everything back, and a restore can itself be undone` (incl. the wrong-database refusal); web API refuses paths outside the backup folder |
 
 ## 3. Test levels
 
 | Level | Where | What | Runs on |
 |---|---|---|---|
-| Unit | `test/*.test.ts` (not `integration`/`e2e`) | Formatting, filters, time parsing, masking, exports, rule parsing and scoping, snapshot diff, production guard, recipe parsing, placeholders, search, durations | Any machine, no database |
-| Integration | `test/*.integration.test.ts` | Trigger mode, snapshot mode, doctor, SQL checks, rule checks, finding, claims and recipe checks against **real PostgreSQL** | Docker locally; GitHub Actions service container in CI |
+| Unit | `test/*.test.ts` (not `integration`/`e2e`) | Formatting, filters, time parsing, masking, exports, rule parsing and scoping, snapshot diff, production guard, recipe parsing, placeholders, search, durations, scenario parsing, constraint reading and made-up values | Any machine, no database |
+| Integration | `test/*.integration.test.ts` | Trigger mode, snapshot mode, doctor, SQL checks, rule checks, finding, claims, recipe checks, seeding, cleanup, session undo and restore against **real PostgreSQL** | Docker locally; GitHub Actions service container in CI |
 | End to end | `test/cli.e2e.test.ts` | The CLI as a separate process: full flows, exit codes, error messages | Same as integration |
 | Web app | `test/ui-server.integration.test.ts` | The web app's API: security, connections, a full recording, exports, rules | Same as integration |
 | Web app, in a browser | Manual walkthrough before a release (section 6) | Start, steps, live timeline, pause, flag, the floating window, stop, sessions, search, rules, setup, light/dark, phone width, console errors | Headless Edge or Chrome |
@@ -75,7 +87,7 @@ Integration tests reset the `propmaster_test` database before each test, so test
 **Exit (release):**
 
 - All automated tests pass on every CI matrix entry.
-- No open defect of high impact (R1, R4, R10, R12, R14 areas).
+- No open defect of high impact (R1, R4, R10, R12, R14, R31, R33 areas).
 - The benchmark shows idle overhead within noise and recording overhead documented.
 - The exploratory checklist in section 6 is done.
 - README, CHANGELOG and this plan are up to date.
@@ -117,7 +129,14 @@ Test Data Finder (v0.2):
 - ⬜ Find data page in a browser: search and tags, parameter form (number and date fields), Find, Claim on a row, Find and claim one, claims list with 2 more hours and Release, Check all recipes, light and dark mode, phone width, no console errors.
 - ⬜ Recipes for a real app (EverShop or Halden), used by two people at once.
 
-## 7. Known limitations (by design in v0.1)
+Seeder & Cleaner (v0.3):
+
+- ✅ CLI on Windows against the demo shop: list scenarios, dry run with a parameter, seed, `runs`, clean preview with the app's own order as a dependent, `--apply` refused, `--include-dependents`, `clean --mine`, `restore`, `clean --session --run` together, `scenarios check`, `find --seed --claim`.
+- ✅ Seed & clean page in headless Edge (10 checks): the saved scenario folder loads, dry run says nothing was saved, seed lists 9 rows and the run, clean preview flags the app's order and keeps **Delete** disabled until dependents are ticked, clean shows the backup, **Undo this** restores the 3 orders, **Undo changes…** on a session's page sets an updated name back, **Create one** on the Find data page seeds and finds an underpaid order, no sideways page scrolling at 390 px, light and dark mode, and no console errors.
+- ⬜ Scenarios for a real app (Halden or EverShop), including a table with a CHECK or trigger the made-up values don't satisfy.
+- ⬜ Cleaning a run while another tester works on the same database.
+
+## 7. Known limitations (by design)
 
 - One recording session per database at a time; filters separate other users' changes.
 - Trigger mode sees a table created during a session from the next step on.
@@ -127,7 +146,11 @@ Test Data Finder (v0.2):
 - SQL checks verify the final state of each touched row, not the order changes happened in.
 - Only tables with a one-column primary key can be claimed.
 - A claim marks a row; it doesn't lock it. The app, and testers who don't use Propmaster, can still change a claimed row.
-- When nothing matches, the Finder says so; creating the missing data is Tool 3's job (Seeder).
+- When nothing matches, the Finder says so; a recipe that names a scenario (`-- seed:`) can create the data with `find --seed`.
+- Seeding inserts straight into the database, so app logic (password hashing, events) doesn't run; give such values in the scenario.
+- Made-up values satisfy common constraints (NOT NULL, simple CHECKs, enums, lengths, unique); other CHECKs, triggers that reject rows, and rules that live only in app code need the value in the scenario.
+- Tables without a primary key can't be seeded, and their recorded changes can't be undone; TRUNCATE can't be undone.
+- Sequences are not reset by cleanup: ids used by a seed are not reused.
 
 ## 8. How to run
 

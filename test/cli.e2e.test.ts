@@ -20,7 +20,7 @@ interface Result {
 
 /** Runs the CLI as a separate process, like a tester would. */
 async function cli(args: string[], url: string | null = TEST_URL): Promise<Result> {
-  const env = { ...process.env, NO_COLOR: '1', PROPMASTER_HOME: home, PROPMASTER_DATABASE_URL: '' };
+  const env = { ...process.env, NO_COLOR: '1', PROPMASTER_HOME: home, PROPMASTER_BACKUPS: join(home, 'backups'), PROPMASTER_DATABASE_URL: '' };
   try {
     const { stdout, stderr } = await exec(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...(url ? ['--url', url] : []), ...args], { env });
     return { code: 0, out: stdout, err: stderr };
@@ -119,7 +119,7 @@ describe('propmaster CLI', { timeout: 60_000 }, () => {
     await cli(['record', 'start', 'Interrupted', '--snapshot'], reader);
 
     // Kill a step while it reads tables and writes files; wherever it stops, the session must stay usable.
-    const env = { ...process.env, NO_COLOR: '1', PROPMASTER_HOME: home, PROPMASTER_DATABASE_URL: '' };
+    const env = { ...process.env, NO_COLOR: '1', PROPMASTER_HOME: home, PROPMASTER_BACKUPS: join(home, 'backups'), PROPMASTER_DATABASE_URL: '' };
     // Several kill moments, from Node still starting up to the step writing its files.
     for (const delay of [300, 600, 900, 1200, 1500]) {
       const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', '--url', reader, 'record', 'step', `Killed at ${delay} ms`], { env });
@@ -236,6 +236,79 @@ describe('propmaster CLI', { timeout: 60_000 }, () => {
       const broken = await cli(['recipes', 'check', '--recipes', dir]);
       expect(broken.code).toBe(1);
       expect(broken.out).toContain('relation "orderz" does not exist.');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds a scenario, cleans it up with a preview first, and restores it from the backup', async () => {
+    await resetDatabase(db);
+    const scenarios = ['--scenarios', 'demo/scenarios'];
+    const list = await cli(['seed', ...scenarios], null); // listing needs no database
+    expect(list.out).toContain('4 scenarios in');
+    expect(list.out).toContain('two-orders');
+
+    const dry = await cli(['seed', 'two orders', ...scenarios, '--dry-run', '-p', 'status=PENDING']);
+    expect(dry.out).toContain('dry run · 9 rows');
+    expect(dry.out).toContain("status='PENDING'");
+    expect(dry.out).toContain('→ to create it: propmaster seed two-orders -p status=PENDING');
+
+    const seeded = await cli(['seed', 'two-orders', ...scenarios, '--as', 'ana', '--json']);
+    const run = JSON.parse(seeded.out) as { runId: string; rows: { table: string; key: { id: number } }[] };
+    expect(run.rows).toHaveLength(9);
+    const runs = await cli(['runs', '--as', 'ana']);
+    expect(runs.out).toMatch(new RegExp(`#${run.runId} +│ Customer with two orders +│ ana \\(you\\)`));
+    expect(runs.out).toMatch(/customers: 1 +│ has data[^]*orders: 2[^]*products: 2[^]*order_items: 3[^]*payments: 1/);
+
+    await db.query('SELECT place_order($1, 2, 1)', [run.rows[0]!.key.id]); // the app adds an order for the seeded customer
+    const preview = await cli(['clean', '--run', run.runId, '--as', 'ana']);
+    expect(preview.code).toBe(0);
+    expect(preview.out).toContain('preview · nothing has been changed');
+    expect(preview.out).toContain('not created by it: points at a row being deleted');
+    expect(preview.out).toContain(`→ to do it: propmaster clean --run ${run.runId} --apply --include-dependents`);
+    const refused = await cli(['clean', '--run', run.runId, '--apply']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('3 other rows (order_items, payments, orders) point at rows being deleted');
+
+    const done = await cli(['clean', '--mine', '--as', 'ana', '--apply', '--include-dependents']);
+    expect(done.out).toContain('cleaned · done in one transaction');
+    expect(done.out).toContain('12 to delete');
+    const backup = /Backup: (.+\.json)/.exec(done.out)![1]!;
+    expect((await cli(['runs'])).out).toContain('No runs with data left to clean.');
+    expect((await cli(['runs', '--all'])).out).toMatch(/cleaned \d{4}-/);
+
+    expect((await cli(['restore'], null)).out).toContain(`Run #${run.runId} · Customer with two orders`);
+    const restored = await cli(['restore', backup, '--apply']);
+    expect(restored.out).toContain('12 to re-insert');
+    expect(Number((await db.query('SELECT count(*) AS n FROM orders')).rows[0].n)).toBe(3);
+
+    const nothing = await cli(['clean']);
+    expect(nothing.err).toContain('What should be cleaned?');
+    const json = await cli(['clean', '--run', 'abc', '--json']);
+    expect(JSON.parse(json.out)).toMatchObject({ error: '"abc" is not a run id.' });
+  });
+
+  it('creates the data a recipe needs when nothing is free, and checks scenarios for CI', async () => {
+    await resetDatabase(db);
+    const args = ['--recipes', 'demo/recipes', '--scenarios', 'demo/scenarios'];
+    const none = await cli(['find', "payment doesn't match", ...args]);
+    expect(none.code).toBe(1);
+    expect(none.out).toContain('create one: propmaster find "order-whose-payment-doesn-t-match-its-total" --seed (scenario underpaid-order)');
+
+    const made = await cli(['find', "payment doesn't match", ...args, '--seed', '--claim', '--as', 'ana']);
+    expect(made.code).toBe(0);
+    expect(made.out).toMatch(/✔ Seeded Underpaid order · run #\d+ · 4 rows/);
+    expect(made.out).toMatch(/│ 42\.25 +│ 37\.25 +│ 5\.00 +│ ✔ yours +│/);
+
+    const check = await cli(['scenarios', 'check', '--scenarios', 'demo/scenarios']);
+    expect(check.code).toBe(0);
+    expect(check.out).toContain('4 working · 0 broken');
+    const dir = await mkdtemp(join(tmpdir(), 'propmaster-scenarios-'));
+    try {
+      await writeFile(join(dir, 'old.yml'), 'seed:\n  orderz: 1\n');
+      const broken = await cli(['scenarios', 'check', '--scenarios', dir]);
+      expect(broken.code).toBe(1);
+      expect(broken.out).toContain('There is no table "orderz".');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

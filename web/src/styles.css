@@ -546,3 +546,12 @@ body {
 .claim-done {
   background: var(--grass-a2);
 }
+
+/* Seed & clean: rows a clean would touch that need a second look (not created by it, or claimed). */
+.row-warn td {
+  background: var(--amber-a2);
+}
+
+.clean-panel {
+  scroll-margin-top: 24px;
+}

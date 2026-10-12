@@ -6,7 +6,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, resolve } from 'node:path';
+import { basename, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describeDatabase, withDb, type Db } from '../core/db.js';
 import { explainError, UserError } from '../core/errors.js';
@@ -21,6 +21,10 @@ import * as claims from '../finder/claims.js';
 import { checkRecipes, claimFound, find } from '../finder/find.js';
 import { loadRecipes, type Recipe } from '../finder/recipes.js';
 import * as trigger from '../recorder/trigger.js';
+import { backupDir, clean, listBackups, type Target } from '../seeder/clean.js';
+import * as runs from '../seeder/runs.js';
+import { loadScenarios, pickScenario, type Scenario } from '../seeder/scenarios.js';
+import { checkScenarios, seed } from '../seeder/seed.js';
 import * as profiles from './profiles.js';
 import { toView } from './view.js';
 
@@ -85,6 +89,20 @@ async function profileRecipe(profile: profiles.Profile, id: unknown): Promise<Re
   if (!recipe) throw new UserError(`There is no recipe "${String(id)}" in ${profile.recipesPath}.`, 'It may have been renamed: reload the list.');
   return recipe;
 }
+
+/** The active profile's scenario with this id. */
+async function profileScenario(profile: profiles.Profile, id: unknown): Promise<Scenario> {
+  if (!profile.scenariosPath) throw new UserError('Choose a scenario folder first.');
+  const scenario = (await loadScenarios(profile.scenariosPath)).find((s) => s.id === id);
+  if (!scenario) throw new UserError(`There is no scenario "${String(id)}" in ${profile.scenariosPath}.`, 'It may have been renamed: reload the list.');
+  return scenario;
+}
+
+/** What the browser needs of a scenario: its rows stay on the server (they hold parsed YAML). */
+const scenarioView = (s: Scenario) => ({
+  id: s.id, name: s.name, description: s.description, tags: s.tags, params: s.params, file: s.file,
+  tables: [...new Set(s.seed.map((r) => r.table))],
+});
 
 /** Who claims in the web app: the name saved on the Find page, else $PROPMASTER_USER or the OS user name. */
 async function me(): Promise<string> {
@@ -275,6 +293,75 @@ const routes: [string, RegExp, Handler][] = [
   ['POST', /^\/api\/claims\/release-mine$/, async () => {
     const by = await me();
     return withActive(async (db) => ({ released: await claims.releaseAllBy(db, by) }));
+  }],
+
+  // ---------- Seeder & Cleaner ----------
+
+  ['GET', /^\/api\/scenarios$/, async () => {
+    const profile = await profiles.activeProfile();
+    const path = profile.scenariosPath ?? '';
+    if (!path) return { path, scenarios: [], error: null };
+    try {
+      return { path, scenarios: (await loadScenarios(path)).map(scenarioView), error: null };
+    } catch (err) {
+      return { path, scenarios: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }],
+  ['PUT', /^\/api\/scenarios$/, async (req) => {
+    const { path } = await req.body();
+    const target = pastedPath(path, 'path');
+    if (!existsSync(target)) throw new UserError(`Can't find ${target}.`, 'Give a folder of .yml scenario files, or one .yml file.');
+    const profile = await profiles.activeProfile();
+    await profiles.setScenariosPath(profile.name, target);
+    return { ok: true, path: target };
+  }],
+  ['POST', /^\/api\/scenarios\/check$/, () => withActive(async (db, _identity, profile) => {
+    if (!profile.scenariosPath) throw new UserError('Choose a scenario folder first.');
+    return { results: await checkScenarios(db, await loadScenarios(profile.scenariosPath)) };
+  })],
+  ['POST', /^\/api\/seed$/, async (req) => {
+    const { scenario, params, dryRun, note } = await req.body();
+    if (note !== undefined && typeof note !== 'string') throw new UserError('"note" must be text.');
+    const by = await me();
+    return withActive(async (db, _identity, profile) => seed(db, await profileScenario(profile, scenario), { params: paramValues(params), dryRun: dryRun === true, by, note: note?.trim() || undefined }));
+  }],
+  ['GET', /^\/api\/runs$/, async (req) => {
+    const by = await me();
+    return withActive(async (db) => ({ me: by, runs: await runs.list(db, { includeCleaned: req.query.get('all') === '1' }) }));
+  }],
+  // Previews (apply: false) or carries out a clean of seed runs and/or a recorded session.
+  ['POST', /^\/api\/clean$/, async (req) => {
+    const { runIds, sessionId, apply, includeDependents, force } = await req.body();
+    if (runIds !== undefined && (!Array.isArray(runIds) || runIds.some((r) => typeof r !== 'string'))) throw new UserError('"runIds" must be a list of run ids.');
+    if (sessionId !== undefined && typeof sessionId !== 'string') throw new UserError('"sessionId" must be text.');
+    const by = await me();
+    return withActive(async (db, identity) => {
+      const targets: Target[] = [];
+      if (sessionId) targets.push({ kind: 'session', recording: await sessions.load(db, identity, sessionId) });
+      if (runIds?.length) targets.push({ kind: 'run', runIds: runIds as string[] });
+      return clean(db, targets, { apply: apply === true, includeDependents: includeDependents === true, force: force === true, by, identity });
+    });
+  }],
+  ['GET', /^\/api\/backups$/, () => withActive(async (_db, identity) => ({ dir: backupDir(), backups: (await listBackups()).filter((b) => b.database === identity) }))],
+  ['POST', /^\/api\/restore$/, async (req) => {
+    const { file, apply, includeDependents, force } = await req.body();
+    const by = await me();
+    // Only files from the backup folder: the browser names one from the list, never an arbitrary path.
+    const path = resolve(backupDir(), basename(str(file, 'file')));
+    return withActive((db, identity) => clean(db, { kind: 'restore', file: path }, { apply: apply === true, includeDependents: includeDependents === true, force: force === true, by, identity }));
+  }],
+  // No free row for a recipe: seed its scenario ("-- seed:"), then find again.
+  ['POST', /^\/api\/find\/seed$/, async (req) => {
+    const { recipe, params, limit } = await req.body();
+    const by = await me();
+    return withActive(async (db, _identity, profile) => {
+      const r = await profileRecipe(profile, recipe);
+      if (!r.seed) throw new UserError(`"${r.name}" doesn't say how to create its data.`, 'Add a line to the recipe naming a seed scenario, e.g. -- seed: two-orders');
+      if (!profile.scenariosPath) throw new UserError(`To create the data, open the scenario folder on the Seed & clean page first (the recipe uses "${r.seed}").`);
+      const scenario = pickScenario(await loadScenarios(profile.scenariosPath), r.seed);
+      const seeded = await seed(db, scenario, { by, note: `for recipe "${r.name}"` });
+      return { seeded: { runId: seeded.runId, scenario: scenario.name, rows: seeded.rows.length }, result: await find(db, r, { params: paramValues(params), limit: limitOf(limit) }) };
+    });
   }],
 
   ['POST', /^\/api\/rules\/check$/, async (req) => {

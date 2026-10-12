@@ -1,5 +1,5 @@
 import { Badge, Box, Button, Card, Flex, Heading, Select, Switch, Table, Text, TextField } from '@radix-ui/themes';
-import { CheckCircle, FolderOpen, HandGrabbing, MagnifyingGlass, PencilSimple, Stethoscope, Timer, Warning, XCircle } from '@phosphor-icons/react';
+import { CheckCircle, FolderOpen, HandGrabbing, MagnifyingGlass, PencilSimple, Plant, Stethoscope, Timer, Warning, XCircle } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
@@ -69,9 +69,14 @@ function ClaimBadge({ claim, me }: { claim: ClaimRow; me: string }) {
   );
 }
 
-function Results({ result, me, busyKey, onClaim }: { result: FindResult; me: string; busyKey: string | null; onClaim: (key: string) => void }) {
+function Results({ result, me, busyKey, onClaim, onSeed }: { result: FindResult; me: string; busyKey: string | null; onClaim: (key: string) => void; onSeed?: () => void }) {
   if (result.rows.length === 0) {
-    return <EmptyState icon={<MagnifyingGlass size={32} />} title="No rows match">Try other parameter values, or create the data you need.</EmptyState>;
+    return (
+      <EmptyState icon={<MagnifyingGlass size={32} />} title="No rows match"
+        action={onSeed && <Button variant="soft" onClick={onSeed} loading={busyKey === 'seed'}><Plant /> Create one ({result.recipe.seed})</Button>}>
+        {onSeed ? 'This recipe names a scenario that creates such data: it is tracked, so you can clean it up afterwards.' : 'Try other parameter values, or create the data you need.'}
+      </EmptyState>
+    );
   }
   const more = result.moreMatches ? 'many' : result.matches - result.rows.length;
   return (
@@ -115,9 +120,10 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [claimed, setClaimed] = useState<ClaimRow[]>([]);
+  const [seeded, setSeeded] = useState<{ runId: string; scenario: string; rows: number } | null>(null);
 
   // A different recipe starts clean.
-  useEffect(() => { setValues({}); setResult(null); setError(null); setClaimed([]); }, [recipe.id]);
+  useEffect(() => { setValues({}); setResult(null); setError(null); setClaimed([]); setSeeded(null); }, [recipe.id]);
 
   const act = async (kind: string, fn: () => Promise<void>) => {
     setBusy(kind);
@@ -135,6 +141,11 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
     setResult(res.result);
     setClaimed(res.claims);
     onClaimed();
+  });
+  const createOne = () => act('seed', async () => {
+    const res = await api<{ seeded: { runId: string; scenario: string; rows: number }; result: FindResult }>('POST', '/find/seed', body);
+    setResult(res.result);
+    setSeeded(res.seeded);
   });
   const required = recipe.params.filter((p) => p.default === undefined && !values[p.name]?.trim());
 
@@ -205,6 +216,15 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
 
       {error && <ErrorCallout error={error} />}
 
+      {seeded && (
+        <Card variant="surface" className="claim-done">
+          <Flex gap="2" align="center">
+            <Plant size={18} weight="fill" color="var(--grass-9)" />
+            <Text size="2">Created {seeded.scenario} ({seeded.rows} rows) as run #{seeded.runId}. Clean it up on the Seed &amp; clean page when your test is done.</Text>
+          </Flex>
+        </Card>
+      )}
+
       {claimed.length > 0 && (
         <Card variant="surface" className="claim-done">
           <Flex gap="2" align="center">
@@ -223,7 +243,7 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
             {result.claimed > 0 && <Badge size="2" color="amber">{result.claimed} claimed</Badge>}
             <Text size="1" color="gray">{result.ms} ms</Text>
           </Flex>
-          <Results result={result} me={me} busyKey={busy} onClaim={(key) => void claim(key)} />
+          <Results result={result} me={me} busyKey={busy} onClaim={(key) => void claim(key)} onSeed={recipe.seed ? () => void createOne() : undefined} />
         </Box>
       )}
     </Flex>

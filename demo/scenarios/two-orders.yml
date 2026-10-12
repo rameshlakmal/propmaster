@@ -1,0 +1,24 @@
+# A customer with order history, for "my orders" and reorder tests.
+name: Customer with two orders
+description: One paid order with two items and a payment, and one cancelled order with an existing product.
+tags: [orders, customers]
+params:
+  status: { type: text, default: PAID, description: Status of the first order }
+
+seed:
+  customers:
+    name: Pat Two-Orders
+    # email is required and unique, so Propmaster makes one up
+    orders:
+      - status: "{{status}}"
+        total: 49.50
+        order_items: 2          # two items, each with a new product
+        payments:
+          amount: 49.50
+          method: CARD
+      - status: CANCELLED
+        total: 12.50
+        order_items:
+          product_id: 1         # an existing product: QA Coffee Mug
+          qty: 1
+          unit_price: 12.50

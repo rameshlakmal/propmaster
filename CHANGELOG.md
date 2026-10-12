@@ -4,6 +4,24 @@ All notable changes to Propmaster. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+Tool 3, the **Seeder & Cleaner**.
+
+### Added
+
+- **Scenarios** (`propmaster seed <scenario>`): YAML files that list the rows a test needs. Under `seed:`, a table holds one row, a list of rows or a number of rows; inside a row, a key is a column or a child table linked through its foreign key. `$count`, `$as` / `{ $ref: name }` and `$via` cover copies, pointing at another row of the scenario, and choosing between several foreign keys. Parameters are typed like recipe parameters (`-p name=value`); text can use `{{param}}`, `{{run}}`, `{{n}}` and `{{unique}}`. Example scenarios: `demo/scenarios/`.
+- **Made-up values** for columns a scenario leaves out: defaults and nullable columns are left alone; a required foreign key gets a new parent row (required cycles are explained instead of looping); other required columns get a value that passes NOT NULL, `CHECK (… IN …)`, enums, `CHECK` number bounds, `varchar(n)`, `numeric(p, s)` and unique constraints, with realistic-looking names, emails, phones, cities and SKUs. A unique clash on a made-up value is retried with a new one.
+- **Tracked runs**: every seeded row is recorded in `_propmaster.seeded_rows` (`sql/seeder.sql`, created on the first seed) in the same transaction as the insert. `--dry-run` seeds and rolls back. `propmaster runs` lists runs that still have data.
+- **Cleanup** (`propmaster clean --run 42`, `--mine`): a preview by default; `--apply` deletes the run's rows by primary key, children first, in one transaction with the rows locked. The preview marks rows changed since seeding and rows already gone. Rows the run didn't create that point at its rows (followed through foreign keys at any depth, `ON DELETE CASCADE` and `SET NULL` children included) need `--include-dependents`; rows another tester claimed need `--force`. Claims on deleted rows are released. A cleaned run can't be cleaned twice.
+- **Undo a recorded session** (`propmaster clean --session 12`): inserts are deleted, updated columns set back and deleted rows put back, newest first, each only if the row still holds what the recording left; anything changed since is reported as a conflict and left alone. TRUNCATE and tables without a primary key are reported as not undoable. `--session` and `--run` can be cleaned together.
+- **Backups and restore**: every applied clean first writes what it changed to `~/.propmaster/backups/` (or `$PROPMASTER_BACKUPS`). `propmaster restore` lists them; `restore <file>` previews putting it back and `--apply` does it, only into the database it came from.
+- **`propmaster scenarios check`** seeds every scenario and rolls back, failing when a migration broke one (scenarios with a required parameter are skipped).
+- **Finder handoff**: a recipe can name the scenario that creates its data (`-- seed: two-orders`). `find --seed` seeds it when not enough rows are free, finds again, and claims with `--claim`; without it, an empty result says how to create one.
+- **Seed & clean page** in the web app: search scenarios, fill in parameters, seed or dry-run, see the rows created; list runs, preview and apply a clean with checkboxes for dependents and claimed rows; undo a recorded session; restore from a backup. **Undo changes…** on a session's page, and **Create one** on the Find data page when a recipe that names a scenario finds nothing.
+
+### Changed
+
+- `propmaster uninstall` also removes the seed-run tracking, and warns first when runs still have data (their rows stay in the database, untracked).
+
 ## [0.2.0] - 2026-10-13
 
 Tool 2, the **Test Data Finder**, and the **web app**.
