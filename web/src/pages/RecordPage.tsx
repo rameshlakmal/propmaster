@@ -1,5 +1,5 @@
 import { Badge, Box, Button, Card, Flex, Heading, RadioCards, Switch, Text, TextField } from '@radix-ui/themes';
-import { ArrowRight, Flag, Pause, PictureInPicture, Play, Plus, Stop } from '@phosphor-icons/react';
+import { ArrowRight, Flag, Pause, PictureInPicture, Play, Plus, Record as RecordIcon, Stop } from '@phosphor-icons/react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { EmptyState, ErrorCallout, PageHeader, TimelineSkeleton } from '../components/Feedback';
@@ -8,8 +8,8 @@ import { toError, useElapsed, useLoad } from '../hooks';
 import { useRecorderActions } from '../recorder';
 import type { ApiError, Recording, Status } from '../types';
 
-function StartForm({ installed, onStarted }: { installed: boolean; onStarted: () => void }) {
-  const [name, setName] = useState('');
+function StartForm({ installed, onStarted, defaultName }: { installed: boolean; onStarted: () => void; defaultName: string }) {
+  const [name, setName] = useState(defaultName);
   const [mode, setMode] = useState<'trigger' | 'snapshot'>(installed ? 'trigger' : 'snapshot');
   const [auto, setAuto] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -30,9 +30,10 @@ function StartForm({ installed, onStarted }: { installed: boolean; onStarted: ()
   };
 
   return (
-    <Card size="4" style={{ maxWidth: 640 }}>
+    <div className="record-start">
+    <Card size="4" className="hero-form">
       <form onSubmit={start}>
-        <Heading size="4" mb="1">Start a recording</Heading>
+        <Heading size="5" mb="1">Start a recording</Heading>
         <Text as="p" size="2" color="gray" mb="5">
           Name it after your test case. Then add a step before each action you take in the app.
         </Text>
@@ -79,6 +80,17 @@ function StartForm({ installed, onStarted }: { installed: boolean; onStarted: ()
         </Button>
       </form>
     </Card>
+    <aside className="how-it-works" aria-label="How recording works">
+      <Text as="p" size="1" weight="bold" className="eyebrow">How it works</Text>
+      <ol>
+        <li><b>Start</b> with your test case's name.</li>
+        <li><b>Add a step</b> before each action: “Click Place Order”.</li>
+        <li><b>Do it in the app.</b> Every row it inserts, updates or deletes shows up under that step, live.</li>
+        <li><b>Stop</b>, then export it, check rules on it, or undo it.</li>
+      </ol>
+      <Text as="p" size="1" color="gray">Tip: <b>Pop out</b> keeps the controls on top of the app you are testing.</Text>
+    </aside>
+    </div>
   );
 }
 
@@ -119,7 +131,7 @@ function Recorder({ status, onChange, onStopped, floating }: { status: Status; o
 
   return (
     <Box>
-      <Card size="3" mb="5">
+      <div className={active.paused ? 'console console-paused' : 'console'}>
         <Flex justify="between" align="center" gap="3" wrap="wrap" mb="4">
           <Flex align="center" gap="3">
             {active.paused
@@ -185,7 +197,7 @@ function Recorder({ status, onChange, onStopped, floating }: { status: Status; o
           </Text>
         </form>
         {actions.error && <Box mt="4"><ErrorCallout error={actions.error} /></Box>}
-      </Card>
+      </div>
 
       {live.error && <Box mb="4"><ErrorCallout error={live.error} /></Box>}
       {!live.data ? <TimelineSkeleton /> : (
@@ -202,7 +214,7 @@ function Recorder({ status, onChange, onStopped, floating }: { status: Status; o
 function StoppedView({ stopped, onAgain, onRenamed }: { stopped: Recording; onAgain: () => void; onRenamed: () => void }) {
   return (
     <Box>
-      <Card size="3" mb="5">
+      <Card size="3" mb="5" className="done-card">
         <Flex justify="between" align="center" gap="4" wrap="wrap">
           <Box>
             <Heading size="4">Recording stopped</Heading>
@@ -230,15 +242,18 @@ interface RecordPageProps {
   stopped: Recording | null;
   onStopped: (rec: Recording | null) => void;
   floating: FloatingControl;
+  /** The current test's name, offered as the recording's name. */
+  defaultName: string;
 }
 
-export function RecordPage({ status, statusError, onChange, stopped, onStopped, floating }: RecordPageProps) {
+export function RecordPage({ status, statusError, onChange, stopped, onStopped, floating, defaultName }: RecordPageProps) {
   if (!status) {
     return statusError ? <ErrorCallout error={statusError} /> : <TimelineSkeleton />;
   }
   return (
     <Box>
       <PageHeader
+        icon={<RecordIcon weight="fill" />} tone="red"
         title="Record"
         description={!status.active ? 'Record what your test does to the database, step by step.'
           : status.active.autoSplitMs ? 'Just test: each action becomes a step, named after what it changed.'
@@ -249,7 +264,7 @@ export function RecordPage({ status, statusError, onChange, stopped, onStopped, 
         : stopped
           ? <StoppedView stopped={stopped} onAgain={() => onStopped(null)}
               onRenamed={() => void api<Recording>('GET', `/sessions/${stopped.id}`).then(onStopped)} />
-          : <StartForm installed={status.installed} onStarted={() => { onStopped(null); onChange(); }} />}
+          : <StartForm installed={status.installed} defaultName={defaultName} onStarted={() => { onStopped(null); onChange(); }} />}
     </Box>
   );
 }

@@ -50,15 +50,21 @@ export function TimelineSkeleton() {
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export type Tone = 'red' | 'blue' | 'green' | 'violet' | 'amber' | 'indigo' | 'gray';
+
+/** A page's title: a coloured tile for the tool, the title, what the page is for, and its actions. */
+export function PageHeader({ title, description, actions, icon, tone = 'indigo' }: { title: string; description?: ReactNode; actions?: ReactNode; icon?: ReactNode; tone?: Tone }) {
   return (
-    <Flex justify="between" align="start" gap="4" mb="5" wrap="wrap">
-      <Box>
-        <Heading size="6" weight="bold">{title}</Heading>
-        {description && <Text as="p" size="2" color="gray" mt="1">{description}</Text>}
-      </Box>
+    <header className="page-head">
+      <Flex gap="4" align="start" minWidth="0">
+        {icon && <span className={`tile tile-lg tile-${tone}`} aria-hidden>{icon}</span>}
+        <Box minWidth="0">
+          <Heading as="h1" size="7" weight="bold" className="display">{title}</Heading>
+          {description && <Text as="p" size="2" color="gray" mt="1" className="page-lede">{description}</Text>}
+        </Box>
+      </Flex>
       {actions && <Flex gap="2" wrap="wrap">{actions}</Flex>}
-    </Flex>
+    </header>
   );
 }
 

@@ -1,5 +1,5 @@
 import { AlertDialog, Badge, Box, Button, Card, Code, Flex, Heading, IconButton, Text, TextField } from '@radix-ui/themes';
-import { CheckCircle, Eye, EyeSlash, Plugs, Trash, Warning, X, XCircle } from '@phosphor-icons/react';
+import { CheckCircle, Eye, GearSix, EyeSlash, Plugs, Trash, Warning, X, XCircle } from '@phosphor-icons/react';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { CopyButton, ErrorCallout, PageHeader } from '../components/Feedback';
@@ -188,7 +188,7 @@ export function SetupPage({ config, status, onChanged }: { config: Config; statu
 
   return (
     <Box>
-      <PageHeader title={first ? 'Welcome to Propmaster' : 'Setup'}
+      <PageHeader icon={<GearSix weight="fill" />} tone="gray" title={first ? 'Welcome to Propmaster' : 'Setup'}
         description={first ? 'Connect a test database, and you can start recording what your tests do to it.' : 'Your database connections and the recorder.'} />
       {error && <Box mb="4"><ErrorCallout error={error} /></Box>}
 

@@ -3,6 +3,7 @@ import { RequestError } from './api';
 import type { ApiError } from './types';
 
 export type Route =
+  | { page: 'home' }
   | { page: 'record' }
   | { page: 'sessions'; id?: string }
   | { page: 'rules' }
@@ -14,8 +15,8 @@ function parseHash(): Route {
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
   if (page === 'sessions') return { page, id: id || undefined };
   if (page === 'seed') return { page, session: id || undefined }; // #seed/12: undo session 12
-  if (page === 'rules' || page === 'find' || page === 'setup') return { page };
-  return { page: 'record' };
+  if (page === 'rules' || page === 'find' || page === 'setup' || page === 'record') return { page };
+  return { page: 'home' };
 }
 
 /** Pages live in the URL hash, so the browser's back button and bookmarks work. */
@@ -120,4 +121,40 @@ export function useSystemAppearance(): 'light' | 'dark' {
     return () => query.removeEventListener('change', onChange);
   }, []);
   return dark ? 'dark' : 'light';
+}
+
+export type ThemeChoice = 'light' | 'dark' | 'system';
+const THEME_KEY = 'propmaster-theme';
+
+/** Light unless the tester picks dark, or "system" to follow the operating system. Kept in this browser. */
+export function useTheme(): { choice: ThemeChoice; appearance: 'light' | 'dark'; setChoice: (c: ThemeChoice) => void } {
+  const system = useSystemAppearance();
+  const [choice, setChoiceState] = useState<ThemeChoice>(() => {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      return saved === 'dark' || saved === 'system' ? saved : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+  const setChoice = (c: ThemeChoice) => {
+    setChoiceState(c);
+    try { localStorage.setItem(THEME_KEY, c); } catch { /* not kept: fine */ }
+  };
+  return { choice, appearance: choice === 'system' ? system : choice, setChoice };
+}
+
+/** "Good morning" for the home page. */
+export function greeting(now = new Date()): string {
+  const h = now.getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+/** "3 min ago", "2 h ago", or the date. */
+export function ago(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return formatWhen(iso);
 }

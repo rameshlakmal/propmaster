@@ -73,7 +73,7 @@ export function useFloatingWindow(props: FloatingProps) {
   useEffect(() => {
     if (!win || !root.current) return;
     root.current.render(
-      <Theme appearance={props.appearance} accentColor="cyan" grayColor="slate" radius="medium" className="floating-theme">
+      <Theme appearance={props.appearance} accentColor="indigo" grayColor="slate" radius="large" className="floating-theme">
         <FloatingPanel win={win} onChange={props.onChange} onStopped={props.onStopped} onClose={close} />
       </Theme>,
     );

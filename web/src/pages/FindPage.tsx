@@ -3,7 +3,9 @@ import { CheckCircle, FolderOpen, HandGrabbing, MagnifyingGlass, PencilSimple, P
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
+import { SourceChip, SourceSetup } from '../components/SourcePicker';
 import { toError, useLoad } from '../hooks';
+import { useWorkspace } from '../workspace';
 import type { ApiError, ClaimRow, FindResult, Recipe, RecipeCheck, RecipesSource } from '../types';
 
 const DURATIONS = [['30m', '30 minutes'], ['1h', '1 hour'], ['2h', '2 hours'], ['4h', '4 hours'], ['1d', '1 day']] as const;
@@ -121,6 +123,7 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
   const [error, setError] = useState<ApiError | null>(null);
   const [claimed, setClaimed] = useState<ClaimRow[]>([]);
   const [seeded, setSeeded] = useState<{ runId: string; scenario: string; rows: number } | null>(null);
+  const ws = useWorkspace();
 
   // A different recipe starts clean.
   useEffect(() => { setValues({}); setResult(null); setError(null); setClaimed([]); setSeeded(null); }, [recipe.id]);
@@ -144,12 +147,14 @@ function RecipePanel({ recipe, me, claimsChanged, onClaimed }: { recipe: Recipe;
     const res = await api<{ claims: ClaimRow[]; result: FindResult }>('POST', '/find/claim', { ...body, key, duration, note });
     setResult(res.result);
     setClaimed(res.claims);
+    ws.addClaims(res.claims.map((c) => ({ id: c.id, table: c.table, key: c.key })));
     onClaimed();
   });
   const createOne = () => act('seed', async () => {
     const res = await api<{ seeded: { runId: string; scenario: string; rows: number }; result: FindResult }>('POST', '/find/seed', body);
     setResult(res.result);
     setSeeded(res.seeded);
+    ws.addRun(res.seeded.runId);
   });
   const required = recipe.params.filter((p) => p.default === undefined && !values[p.name]?.trim());
 
@@ -425,7 +430,6 @@ function CheckResults({ results }: { results: RecipeCheck[] }) {
 
 export function FindPage({ activeProfile }: { activeProfile: string | null }) {
   const source = useLoad(() => api<RecipesSource>('GET', '/recipes'), [activeProfile]);
-  const [path, setPath] = useState('');
   const [selected, setSelected] = useState<string | null>(() => sessionStorage.getItem('propmaster-recipe'));
   const [busy, setBusy] = useState<'open' | 'check' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -436,43 +440,45 @@ export function FindPage({ activeProfile }: { activeProfile: string | null }) {
 
   const recipes = useMemo(() => source.data?.recipes ?? [], [source.data]);
   const recipe = recipes.find((r) => r.id === selected) ?? recipes[0] ?? null;
-
-  useEffect(() => { if (source.data) setPath(source.data.path); }, [source.data]);
+  const path = source.data?.path ?? '';
 
   const act = async (kind: 'open' | 'check', fn: () => Promise<void>) => {
     setBusy(kind);
     setError(null);
     try { await fn(); } catch (err) { setError(toError(err)); } finally { setBusy(null); }
   };
-  const open = () => act('open', async () => { await api('PUT', '/recipes', { path }); setChecks(null); await source.refresh(); });
+  const open = (to: string) => act('open', async () => { await api('PUT', '/recipes', { path: to }); setChecks(null); await source.refresh(); });
   const check = () => act('check', async () => { setChecks((await api<{ results: RecipeCheck[] }>('POST', '/recipes/check')).results); });
   const select = (id: string) => { setSelected(id); sessionStorage.setItem('propmaster-recipe', id); };
+  const placeholder = 'C:\\path\\to\\recipes (a folder of .sql files, or one file)';
 
   return (
     <Box>
-      <PageHeader title="Find data" description="Recipes are shared queries that find test data in the state you need. Claim a row so nobody else uses it while you test." />
+      <PageHeader icon={<MagnifyingGlass weight="bold" />} tone="blue" title="Find data"
+        description="Shared queries that find test data in the state you need. Claim a row so nobody else uses it while you test."
+        actions={<SourceChip path={path} count={recipes.length} noun="recipes" placeholder={placeholder} busy={busy} onOpen={open} onCheck={() => void check()} />} />
 
       {error && <Box mb="4"><ErrorCallout error={error} /></Box>}
+      {source.data?.error && <Box mb="4"><ErrorCallout error={{ message: source.data.error }} /></Box>}
+      {source.error && <Box mb="4"><ErrorCallout error={source.error} /></Box>}
+      {checks && (
+        <Card size="2" mb="5">
+          <Flex justify="between" align="center" mb="3"><Heading as="h2" size="3">Recipe check</Heading><Button size="1" variant="ghost" color="gray" onClick={() => setChecks(null)}>Close</Button></Flex>
+          <CheckResults results={checks} />
+        </Card>
+      )}
 
-      <Card size="2" mb="5">
-        <Flex gap="2" wrap="wrap" align="center">
-          <Box flexGrow="1" minWidth="280px">
-            <TextField.Root value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\recipes (a folder of .sql files, or one file)"
-              aria-label="Recipe folder" className="mono" onKeyDown={(e) => { if (e.key === 'Enter' && path) void open(); }} />
-          </Box>
-          <Button variant="soft" onClick={() => void open()} loading={busy === 'open'} disabled={!path}><FolderOpen /> Open</Button>
-          <Button variant="soft" color="gray" onClick={() => void check()} loading={busy === 'check'} disabled={recipes.length === 0}><Stethoscope /> Check all recipes</Button>
-        </Flex>
-        {source.data?.error && <Box mt="3"><ErrorCallout error={{ message: source.data.error }} /></Box>}
-        {source.error && <Box mt="3"><ErrorCallout error={source.error} /></Box>}
-        {checks && <Box mt="3"><CheckResults results={checks} /></Box>}
-      </Card>
-
-      {recipes.length === 0 ? (
+      {!path && !source.loading && !source.error ? (
+        <Box mb="5">
+          <SourceSetup title="Open your recipe folder" placeholder={placeholder} busy={busy === 'open'} onOpen={open} noun="recipes">
+            A recipe is a SELECT with a "-- recipe: name" line above it, kept in a .sql file next to your tests. Try the demo: the demo/recipes folder of Propmaster.
+          </SourceSetup>
+        </Box>
+      ) : recipes.length === 0 ? (
         !source.loading && !source.data?.error && !source.error && (
           <Card size="3" mb="5">
-            <EmptyState icon={<MagnifyingGlass size={36} />} title="Open a recipe folder">
-              A recipe is a SELECT with a "-- recipe: name" line above it, kept in a .sql file next to your tests. Try the demo: the demo/recipes folder of Propmaster.
+            <EmptyState icon={<MagnifyingGlass size={36} />} title="No recipes in this folder">
+              A recipe is a SELECT with a "-- recipe: name" line above it, in a .sql file. Open another folder from the chip above.
             </EmptyState>
           </Card>
         )

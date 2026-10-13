@@ -76,7 +76,11 @@ npm run build
 npm run ui           # opens Propmaster in your browser
 ```
 
-1. **Setup:** paste your test database's connection string, press **Test** to see what your DB user can do, and save it. Install the recorder with one click.
+The app is organised around **the test you're working on**. On **Home**, name it (*TC-142 Guest checkout*) and Propmaster follows it through five stages, **Find → Seed → Record → Check → Clean**, ticking each off as you claim data, seed rows, record, run rules and clean up. The stages stay in view under the top bar on every page. **Finish & clean up** releases the test's claims, deletes the rows seeded for it and, if you want, undoes what the app changed while you recorded, all from one preview. Home also lists your claims, the runs still to clean, and recent recordings. Press **Ctrl K** (⌘K) anywhere to jump to a page, recipe, scenario or session, or to start and finish tests. Light by default, with dark mode (or follow the system) in the top bar.
+
+![Home: the current test, its stages and a live recording](docs/images/web-app-home.png)
+
+1. **Setup** (the gear in the top bar): paste your test database's connection string, press **Test** to see what your DB user can do, and save it. Install the recorder with one click.
 2. **Record:** name the test case and press **Start recording**. Before each action in the app you're testing, type what you're about to do and press Enter. The changes appear live under that step.
    - **Name steps for me** (live recording): no typing at all. Each action you take becomes a step when the app goes quiet for 3 seconds, named after what it changed, such as *New order #66 with order item, payment · inventory product_id 3 stock 14 → 12* or *Order #66 status PENDING → CANCELLED*. Type a name first when you want to choose it.
    - **Pop out** (Chrome and Edge) opens a small floating window that stays on top of the app you're testing: add steps, pause, flag and stop from there, and watch the latest changes arrive.
@@ -90,7 +94,7 @@ npm run ui           # opens Propmaster in your browser
 
 ![A recorded session, with one change opened](docs/images/web-app-session.png)
 
-![The floating recorder window, paused, with a flag note open](docs/images/web-app-floating.png)
+![Ctrl K: search pages, recipes, scenarios and sessions](docs/images/web-app-palette.png)
 
 The web app runs on your own machine only: it listens on `127.0.0.1`, every request needs the secret token in the link it opens, and requests from other websites are refused. Saved connections live in `~/.propmaster/ui.json`.
 
@@ -370,7 +374,7 @@ $ propmaster clean --run 42 --apply --include-dependents
 - **No match? Create one.** A recipe can name the scenario that creates its data with `-- seed: two-orders`. `propmaster find "<recipe>" --seed --claim` seeds it when nothing is free, finds again and claims the new row.
 - **CI.** `propmaster scenarios check` seeds every scenario in a transaction that is rolled back, and fails when a migration broke one.
 
-**In the web app**, the **Seed & clean** page lists and searches scenarios, fills in their parameters, seeds or dry-runs them, and shows the rows created. Runs, the clean preview (with checkboxes for dependents and claimed rows), session undo and backups are on the same page. A session's page has **Undo changes…**, and the **Find data** page offers **Create one** when a recipe that names a scenario finds nothing.
+**In the web app**, the **Seed & clean** page lists and searches scenarios, fills in their parameters, seeds or dry-runs them, and shows the rows created. The **Clean up** tab lists runs and undoes recorded sessions, with a preview (and checkboxes for dependents and claimed rows) before anything changes; **Backups** restores a clean. A session's page has **Undo changes…**, and the **Find data** page offers **Create one** when a recipe that names a scenario finds nothing.
 
 [demo/scenarios](demo/scenarios) has four example scenarios for the demo shop, and the design notes are in [docs/SEEDER.md](docs/SEEDER.md).
 

@@ -1,9 +1,10 @@
 import { Badge, Box, Button, Card, Flex, Heading, Select, Switch, Table, Text, TextArea, TextField } from '@radix-ui/themes';
-import { CheckCircle, FloppyDisk, FolderOpen, MinusCircle, Play, Warning, XCircle } from '@phosphor-icons/react';
+import { CheckCircle, FloppyDisk, ListChecks, FolderOpen, MinusCircle, Play, Warning, XCircle } from '@phosphor-icons/react';
 import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorCallout, PageHeader } from '../components/Feedback';
 import { formatWhen, toError, useLoad } from '../hooks';
+import { useWorkspace } from '../workspace';
 import type { ApiError, RuleResult, RulesFile, SessionPage } from '../types';
 
 const STATUS = {
@@ -114,6 +115,7 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
   const [busy, setBusy] = useState<'open' | 'save' | 'run' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [results, setResults] = useState<{ results: RuleResult[]; allRows: boolean } | null>(null);
+  const ws = useWorkspace();
 
   useEffect(() => {
     if (!file.data) return;
@@ -146,12 +148,18 @@ export function RulesPage({ activeProfile }: { activeProfile: string | null }) {
     if (dirty && file.data?.path) { await api('PUT', '/rules', { path: file.data.path, content }); setDirty(false); }
     const res = await api<{ results: RuleResult[] }>('POST', '/rules/check', { sessionId, allRows });
     setResults({ results: res.results, allRows });
+    ws.setChecked({
+      sessionId: allRows ? null : sessionId,
+      failed: res.results.filter((r) => r.status === 'fail' || r.status === 'error').length,
+      passed: res.results.filter((r) => r.status === 'pass').length,
+      at: new Date().toISOString(),
+    });
     sessionStorage.removeItem('propmaster-rules-session');
   });
 
   return (
     <Box>
-      <PageHeader title="Rules" description="Business rules are SQL queries that return the rows breaking them. {{orders}} means the orders rows a session touched." />
+      <PageHeader icon={<ListChecks weight="bold" />} tone="amber" title="Rules" description="Business rules are SQL queries that return the rows breaking them. {{orders}} means the orders rows a session touched." />
 
       {error && <Box mb="4"><ErrorCallout error={error} /></Box>}
 

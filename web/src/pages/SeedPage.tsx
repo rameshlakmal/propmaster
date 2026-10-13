@@ -1,9 +1,12 @@
-import { Badge, Box, Button, Card, Checkbox, Flex, Heading, Select, Switch, Table, Text, TextField } from '@radix-ui/themes';
+import { Badge, Box, Button, Card, Flex, Heading, Select, Switch, Table, Tabs, Text, TextField } from '@radix-ui/themes';
 import { ArrowCounterClockwise, Broom, CheckCircle, FolderOpen, MagnifyingGlass, Plant, Stethoscope, Warning, XCircle } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { CopyButton, EmptyState, ErrorCallout, PageHeader } from '../components/Feedback';
+import { SourceChip, SourceSetup } from '../components/SourcePicker';
+import { CleanPanel, type CleanTarget } from '../components/CleanPanel';
 import { formatWhen, toError, useLoad } from '../hooks';
+import { useWorkspace } from '../workspace';
 import type { ApiError, BackupInfo, CleanAction, CleanResult, Row, Run, Scenario, ScenarioCheck, ScenariosSource, SeedResult, SessionPage } from '../types';
 
 const short = (table: string) => table.replace(/^public\./, '');
@@ -84,6 +87,7 @@ function ScenarioPanel({ scenario, onSeeded, onClean }: { scenario: Scenario; on
   const [busy, setBusy] = useState<'seed' | 'dry' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [result, setResult] = useState<SeedResult | null>(null);
+  const ws = useWorkspace();
 
   useEffect(() => { setValues({}); setResult(null); setError(null); }, [scenario.id]);
 
@@ -91,8 +95,9 @@ function ScenarioPanel({ scenario, onSeeded, onClean }: { scenario: Scenario; on
     setBusy(dryRun ? 'dry' : 'seed');
     setError(null);
     try {
-      setResult(await api<SeedResult>('POST', '/seed', { scenario: scenario.id, params: values, dryRun, note }));
-      if (!dryRun) onSeeded();
+      const r = await api<SeedResult>('POST', '/seed', { scenario: scenario.id, params: values, dryRun, note: note || ws.test?.name || '' });
+      setResult(r);
+      if (!dryRun && r.runId) { ws.addRun(r.runId); onSeeded(); }
     } catch (err) {
       setError(toError(err));
     } finally {
@@ -164,159 +169,6 @@ function ScenarioPanel({ scenario, onSeeded, onClean }: { scenario: Scenario; on
         </Box>
       )}
     </Flex>
-  );
-}
-
-// ---------- cleaning ----------
-
-const VERB: Record<CleanAction['op'], { label: string; color: 'red' | 'cyan' | 'violet' }> = {
-  delete: { label: 'delete', color: 'red' }, update: { label: 'put back', color: 'cyan' }, insert: { label: 're-insert', color: 'violet' },
-};
-
-function note(a: CleanAction): string {
-  const diffs = (list: { column: string; from: unknown; to: unknown }[]) => list.map((d) => `${d.column} ${show(d.from)} → ${show(d.to)}`).join(', ');
-  if (a.why === 'dependent') return `Not created by it: points at a row being deleted (${a.via})`;
-  if (a.op === 'delete' && a.why === 'seeded') return a.changed.length ? `Changed since seeding: ${diffs(a.changed)}` : '';
-  if (a.op === 'delete') return 'Inserted during the session';
-  if (a.op === 'update') return diffs(Object.keys(a.set).map((k) => ({ column: k, from: a.current[k], to: a.set[k] })));
-  return 'Deleted during the session';
-}
-
-export type CleanTarget = { runIds?: string[]; sessionId?: string; file?: string; label: string };
-
-/** A clean, from its preview to done: what will change, what blocks it, and the button to do it. */
-function CleanPanel({ target, onDone, onClose, onRestore }: { target: CleanTarget; onDone: () => void; onClose: () => void; onRestore: (file: string) => void }) {
-  const [result, setResult] = useState<CleanResult | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [includeDependents, setIncludeDependents] = useState(false);
-  const [force, setForce] = useState(false);
-
-  const call = (apply: boolean) => target.file
-    ? api<CleanResult>('POST', '/restore', { file: target.file, apply, includeDependents, force })
-    : api<CleanResult>('POST', '/clean', { runIds: target.runIds, sessionId: target.sessionId, apply, includeDependents, force });
-
-  useEffect(() => {
-    setResult(null); setError(null); setIncludeDependents(false); setForce(false);
-    // Clicking another run before this preview arrives must not show this one's plan under the other's button.
-    let live = true;
-    call(false).then((r) => { if (live) setResult(r); }, (err) => { if (live) setError(toError(err)); });
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
-
-  const apply = async () => {
-    setBusy(true);
-    setError(null);
-    try { setResult(await call(true)); onDone(); } catch (err) { setError(toError(err)); } finally { setBusy(false); }
-  };
-
-  const plan = result?.plan;
-  const dependents = plan?.actions.filter((a) => a.why === 'dependent').length ?? 0;
-  const claimedKeys = new Set(plan?.claimed.map((c) => `${c.table}|${keyText(c.key)}`));
-  const counts = plan ? (['delete', 'update', 'insert'] as const).map((op) => [op, plan.actions.filter((a) => a.op === op).length] as const).filter(([, n]) => n > 0) : [];
-  const blocked = Boolean(plan && (plan.unkeyedDependents.length || (dependents && !includeDependents) || (plan.claimed.length && !force)));
-
-  return (
-    <Card size="3" className="clean-panel">
-      <Flex justify="between" align="start" gap="3" mb="3" wrap="wrap">
-        <Box>
-          <Heading as="h3" size="3">{plan?.title ?? target.label}</Heading>
-          <Text size="2" color={result?.applied ? 'grass' : 'gray'}>{result?.applied ? 'Done, in one transaction.' : 'Preview: nothing has been changed yet.'}</Text>
-        </Box>
-        <Button variant="ghost" color="gray" onClick={onClose}>Close</Button>
-      </Flex>
-      {error && <Box mb="3"><ErrorCallout error={error} /></Box>}
-      {!plan && !error && <Text size="2" color="gray">Working out what would change…</Text>}
-      {plan && (
-        <Flex direction="column" gap="3">
-          {plan.actions.length === 0 ? <Text size="2" color="gray">Nothing to change.</Text> : (
-            <Table.Root variant="surface" size="1" className="tall-table">
-              <Table.Header>
-                <Table.Row>
-                  <Table.ColumnHeaderCell width="100px">Action</Table.ColumnHeaderCell>
-                  <Table.ColumnHeaderCell>Table</Table.ColumnHeaderCell>
-                  <Table.ColumnHeaderCell>Row</Table.ColumnHeaderCell>
-                  <Table.ColumnHeaderCell>Note</Table.ColumnHeaderCell>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {plan.actions.map((a, i) => {
-                  const claim = plan.claimed.find((c) => c.table === a.table && keyText(c.key) === keyText(a.key));
-                  return (
-                    <Table.Row key={i} className={a.why === 'dependent' || claimedKeys.has(`${a.table}|${keyText(a.key)}`) ? 'row-warn' : undefined}>
-                      <Table.Cell><Badge color={VERB[a.op].color} variant="soft">{VERB[a.op].label}</Badge></Table.Cell>
-                      <Table.Cell>{short(a.table)}</Table.Cell>
-                      <Table.Cell className="mono">{keyText(a.key)}</Table.Cell>
-                      <Table.Cell>
-                        <Text size="1" color={a.why === 'dependent' ? 'amber' : 'gray'}>{note(a) || '–'}</Text>
-                        {claim && <Text as="div" size="1" color="amber">Claimed by {claim.claim.claimedBy} (#{claim.claim.id})</Text>}
-                      </Table.Cell>
-                    </Table.Row>
-                  );
-                })}
-              </Table.Body>
-            </Table.Root>
-          )}
-
-          {plan.skipped.length > 0 && (
-            <Box>
-              <Text as="p" size="2" weight="medium" mb="1">Left alone</Text>
-              {plan.skipped.map((s, i) => (
-                <Text as="p" key={i} size="1" color={s.reason === 'gone' ? 'gray' : 'amber'}>
-                  {short(s.table)} {s.key ? keyText(s.key) : ''} · {s.detail}
-                </Text>
-              ))}
-            </Box>
-          )}
-
-          {!result.applied && (
-            <Flex direction="column" gap="2">
-              {plan.unkeyedDependents.map((u) => (
-                <Text key={u.via} size="2" color="red"><XCircle /> {u.count} rows of {short(u.table)} point at rows being deleted ({u.via}), but that table has no primary key: delete or re-point them first.</Text>
-              ))}
-              {dependents > 0 && (
-                <Text as="label" size="2">
-                  <Flex gap="2" align="start">
-                    <Checkbox checked={includeDependents} onCheckedChange={(v) => setIncludeDependents(v === true)} />
-                    <span><Warning color="var(--amber-9)" /> Also delete the {dependents} {dependents === 1 ? 'row' : 'rows'} that weren't created by it but point at rows being deleted.</span>
-                  </Flex>
-                </Text>
-              )}
-              {plan.claimed.length > 0 && (
-                <Text as="label" size="2">
-                  <Flex gap="2" align="start">
-                    <Checkbox checked={force} onCheckedChange={(v) => setForce(v === true)} />
-                    <span><Warning color="var(--amber-9)" /> Clean anyway, although {plan.claimed.length === 1 ? 'a row is' : `${plan.claimed.length} rows are`} claimed by someone else.</span>
-                  </Flex>
-                </Text>
-              )}
-              {plan.actions.length > 0 && (
-                <Flex gap="3" align="center" wrap="wrap">
-                  <Button color="red" onClick={() => void apply()} loading={busy} disabled={blocked} className="press">
-                    <Broom /> {counts.map(([op, n]) => `${VERB[op].label.replace(/^./, (c) => c.toUpperCase())} ${n}`).join(', ')}
-                  </Button>
-                  <Text size="1" color="gray">One transaction. A backup is saved first, so it can be undone.</Text>
-                </Flex>
-              )}
-            </Flex>
-          )}
-
-          {result.applied && (
-            <Flex direction="column" gap="2">
-              {result.releasedClaims > 0 && <Text size="2">Released {result.releasedClaims} claims on deleted rows.</Text>}
-              {result.backup && (
-                <Flex gap="3" align="center" wrap="wrap">
-                  <Text size="1" color="gray" className="mono">Backup: {result.backup}</Text>
-                  <CopyButton text={result.backup} label="Copy the backup path" />
-                  <Button size="1" variant="soft" onClick={() => onRestore(result.backup!)}><ArrowCounterClockwise /> Undo this…</Button>
-                </Flex>
-              )}
-            </Flex>
-          )}
-        </Flex>
-      )}
-    </Card>
   );
 }
 
@@ -448,19 +300,25 @@ const CHECK = {
   error: <XCircle size={18} weight="fill" color="var(--red-9)" />,
 };
 
+type SeedTab = 'seed' | 'clean' | 'backups';
+
 export function SeedPage({ activeProfile, session }: { activeProfile: string | null; session?: string }) {
   const source = useLoad(() => api<ScenariosSource>('GET', '/scenarios'), [activeProfile]);
-  const [path, setPath] = useState('');
   const [selected, setSelected] = useState<string | null>(() => sessionStorage.getItem('propmaster-scenario'));
   const [busy, setBusy] = useState<'open' | 'check' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [checks, setChecks] = useState<ScenarioCheck[] | null>(null);
   const [version, setVersion] = useState(0);
   const [target, setTarget] = useState<CleanTarget | null>(null);
+  const [tab, setTabState] = useState<SeedTab>(() => (session ? 'clean' : (sessionStorage.getItem('propmaster-seed-tab') as SeedTab | null) ?? 'seed'));
+  const setTab = (t: SeedTab) => { setTabState(t); sessionStorage.setItem('propmaster-seed-tab', t); };
+  const ws = useWorkspace();
+  // Cleaning the current test's runs or recording counts as its Clean stage.
+  const touchesTest = (t: CleanTarget) => Boolean(ws.test && ((t.runIds ?? []).some((id) => ws.test!.runs.includes(id)) || (t.sessionId && ws.test.sessions.includes(t.sessionId))));
 
   const scenarios = useMemo(() => source.data?.scenarios ?? [], [source.data]);
   const scenario = scenarios.find((s) => s.id === selected) ?? scenarios[0] ?? null;
-  useEffect(() => { if (source.data) setPath(source.data.path); }, [source.data]);
+  const path = source.data?.path ?? '';
   // #seed/12 (from the Sessions page) opens the undo preview of session 12.
   useEffect(() => { if (session) setTarget({ sessionId: session, label: `Session #${session}` }); }, [session]);
 
@@ -469,75 +327,94 @@ export function SeedPage({ activeProfile, session }: { activeProfile: string | n
     setError(null);
     try { await fn(); } catch (err) { setError(toError(err)); } finally { setBusy(null); }
   };
-  const open = () => act('open', async () => { await api('PUT', '/scenarios', { path }); setChecks(null); await source.refresh(); });
+  const open = (to: string) => act('open', async () => { await api('PUT', '/scenarios', { path: to }); setChecks(null); await source.refresh(); });
   const check = () => act('check', async () => { setChecks((await api<{ results: ScenarioCheck[] }>('POST', '/scenarios/check')).results); });
   const select = (id: string) => { setSelected(id); sessionStorage.setItem('propmaster-scenario', id); };
   const clean = (t: CleanTarget) => {
     setTarget(t);
     requestAnimationFrame(() => document.getElementById('clean-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
+  const placeholder = 'C:\\path\\to\\scenarios (a folder of .yml files, or one file)';
 
   return (
     <Box>
-      <PageHeader title="Seed & clean" description="Scenarios create the rows a test needs, linked correctly, and every row is tracked. Cleaning removes exactly those rows, or undoes what a recorded session changed." />
+      <PageHeader icon={<Plant weight="fill" />} tone="green" title="Seed & clean"
+        description="Create exactly the rows a test needs, every one tracked; then remove exactly those rows, or undo what a recorded session changed."
+        actions={tab === 'seed' ? <SourceChip path={path} count={scenarios.length} noun="scenarios" placeholder={placeholder} busy={busy} onOpen={open} onCheck={() => void check()} /> : undefined} />
       {error && <Box mb="4"><ErrorCallout error={error} /></Box>}
 
-      <Card size="2" mb="5">
-        <Flex gap="2" wrap="wrap" align="center">
-          <Box flexGrow="1" minWidth="280px">
-            <TextField.Root value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\scenarios (a folder of .yml files, or one file)"
-              aria-label="Scenario folder" className="mono" onKeyDown={(e) => { if (e.key === 'Enter' && path) void open(); }} />
-          </Box>
-          <Button variant="soft" onClick={() => void open()} loading={busy === 'open'} disabled={!path}><FolderOpen /> Open</Button>
-          <Button variant="soft" color="gray" onClick={() => void check()} loading={busy === 'check'} disabled={scenarios.length === 0}><Stethoscope /> Check all scenarios</Button>
-        </Flex>
-        {source.data?.error && <Box mt="3"><ErrorCallout error={{ message: source.data.error }} /></Box>}
-        {source.error && <Box mt="3"><ErrorCallout error={source.error} /></Box>}
-        {checks && (
-          <Box mt="3">
-            <Table.Root variant="surface" size="1">
-              <Table.Body>
-                {checks.map((r) => (
-                  <Table.Row key={r.scenario.id}>
-                    <Table.Cell width="36px">{CHECK[r.status]}</Table.Cell>
-                    <Table.RowHeaderCell>{r.scenario.name}</Table.RowHeaderCell>
-                    <Table.Cell><Text size="2" color={r.status === 'error' ? 'red' : 'gray'}>{r.status === 'ok' ? `works · ${r.rows} rows (rolled back)` : r.error}</Text></Table.Cell>
-                    <Table.Cell width="80px"><Text size="1" color="gray">{r.ms} ms</Text></Table.Cell>
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
-          </Box>
-        )}
-      </Card>
+      <Tabs.Root value={tab} onValueChange={(v) => setTab(v as SeedTab)}>
+        <Tabs.List size="2" className="page-tabs">
+          <Tabs.Trigger value="seed"><Plant /> Seed</Tabs.Trigger>
+          <Tabs.Trigger value="clean"><Broom /> Clean up</Tabs.Trigger>
+          <Tabs.Trigger value="backups"><ArrowCounterClockwise /> Backups</Tabs.Trigger>
+        </Tabs.List>
 
-      {scenarios.length === 0 ? (
-        !source.loading && !source.data?.error && !source.error && (
-          <Card size="3" mb="5">
-            <EmptyState icon={<Plant size={36} />} title="Open a scenario folder">
-              A scenario is a .yml file that lists the rows a test needs; Propmaster fills in the rest and links them. Try the demo: the demo/scenarios folder of Propmaster.
-            </EmptyState>
-          </Card>
-        )
-      ) : (
-        <div className="find-grid">
-          <Card size="2"><ScenarioList scenarios={scenarios} selected={scenario?.id ?? null} onSelect={select} /></Card>
-          <Card size="3">{scenario && <ScenarioPanel scenario={scenario} onSeeded={() => setVersion((v) => v + 1)} onClean={(id) => clean({ runIds: [id], label: `Run #${id}` })} />}</Card>
+        {/* A clean being previewed stays in view whichever tab is open. */}
+        <div id="clean-panel">
+          {target && (
+            <Box mt="5">
+              <CleanPanel target={target} onClose={() => setTarget(null)} onDone={() => { setVersion((v) => v + 1); if (touchesTest(target)) ws.markCleaned(); }}
+                onRestore={(file) => clean({ file, label: 'Restore from backup' })} />
+            </Box>
+          )}
         </div>
-      )}
 
-      <div id="clean-panel">
-        {target && (
-          <Box mb="5">
-            <CleanPanel target={target} onClose={() => setTarget(null)} onDone={() => setVersion((v) => v + 1)}
-              onRestore={(file) => clean({ file, label: 'Restore from backup' })} />
+        <Tabs.Content value="seed">
+          <Box pt="5">
+            {source.data?.error && <Box mb="4"><ErrorCallout error={{ message: source.data.error }} /></Box>}
+            {source.error && <Box mb="4"><ErrorCallout error={source.error} /></Box>}
+            {checks && (
+              <Card size="2" mb="5">
+                <Flex justify="between" align="center" mb="3"><Heading as="h2" size="3">Scenario check</Heading><Button size="1" variant="ghost" color="gray" onClick={() => setChecks(null)}>Close</Button></Flex>
+                <Table.Root variant="surface" size="1">
+                  <Table.Body>
+                    {checks.map((r) => (
+                      <Table.Row key={r.scenario.id}>
+                        <Table.Cell width="36px">{CHECK[r.status]}</Table.Cell>
+                        <Table.RowHeaderCell>{r.scenario.name}</Table.RowHeaderCell>
+                        <Table.Cell><Text size="2" color={r.status === 'error' ? 'red' : 'gray'}>{r.status === 'ok' ? `works · ${r.rows} rows (rolled back)` : r.error}</Text></Table.Cell>
+                        <Table.Cell width="80px"><Text size="1" color="gray">{r.ms} ms</Text></Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              </Card>
+            )}
+            {!path && !source.loading && !source.error ? (
+              <SourceSetup title="Open your scenario folder" placeholder={placeholder} busy={busy === 'open'} onOpen={open} noun="scenarios">
+                A scenario is a .yml file that lists the rows a test needs; Propmaster fills in the rest and links them. Try the demo: the demo/scenarios folder of Propmaster.
+              </SourceSetup>
+            ) : scenarios.length === 0 ? (
+              !source.loading && !source.data?.error && !source.error && (
+                <Card size="3">
+                  <EmptyState icon={<Plant size={36} />} title="No scenarios in this folder">
+                    A scenario is a .yml file with a seed: section. Open another folder from the chip above.
+                  </EmptyState>
+                </Card>
+              )
+            ) : (
+              <div className="find-grid">
+                <Card size="2"><ScenarioList scenarios={scenarios} selected={scenario?.id ?? null} onSelect={select} /></Card>
+                <Card size="3">{scenario && <ScenarioPanel scenario={scenario} onSeeded={() => setVersion((v) => v + 1)} onClean={(id) => { setTab('clean'); clean({ runIds: [id], label: `Run #${id}` }); }} />}</Card>
+              </div>
+            )}
           </Box>
-        )}
-      </div>
+        </Tabs.Content>
 
-      <Runs version={version} activeProfile={activeProfile} onClean={clean} />
-      <UndoSession activeProfile={activeProfile} preselected={session} onClean={clean} />
-      <Backups version={version} activeProfile={activeProfile} onRestore={(file) => clean({ file, label: 'Restore from backup' })} />
+        <Tabs.Content value="clean">
+          <Box pt="5">
+            <Runs version={version} activeProfile={activeProfile} onClean={clean} />
+            <UndoSession activeProfile={activeProfile} preselected={session} onClean={clean} />
+          </Box>
+        </Tabs.Content>
+
+        <Tabs.Content value="backups">
+          <Box pt="5">
+            <Backups version={version} activeProfile={activeProfile} onRestore={(file) => clean({ file, label: 'Restore from backup' })} />
+          </Box>
+        </Tabs.Content>
+      </Tabs.Root>
     </Box>
   );
 }

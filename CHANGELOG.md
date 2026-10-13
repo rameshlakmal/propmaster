@@ -20,6 +20,14 @@ Tool 3, the **Seeder & Cleaner**.
 
 ### Changed
 
+- **Redesigned web app.** A new look (light first, with dark or system in the top bar) and a new way to work:
+  - **Home** is your test workspace: name the test you're on, and a **Find → Seed → Record → Check → Clean** stepper fills in as you claim, seed, record, check rules and clean. Cards list your claims, runs still to clean and recent recordings, and a live recording shows with its current step.
+  - **Finish & clean up** releases the test's claims, deletes the rows seeded for it and can undo what the app changed while recording, through the usual clean preview.
+  - A **top bar** replaces the sidebar: tabs, a live REC pill, the database switcher, appearance and Setup. The current test's stages stay in a strip under it on every page.
+  - **Ctrl K / ⌘K** command palette: pages, actions (new test, finish test, theme), and search across recipes, scenarios and recent sessions.
+  - Recordings are named after the current test by default; claims, seed runs, recordings and rule checks are gathered under it (kept per database in this browser).
+  - **Seed & clean** is split into Seed, Clean up and Backups tabs. Recipe and scenario folders are a small chip in the page header (Change, Check all) instead of a path bar.
+  - Record page: a start form with a how-it-works guide, and a highlighted console while recording. Every page has a coloured tool icon and a clearer header.
 - `propmaster uninstall` also removes the seed-run tracking, and warns first when runs still have data (their rows stay in the database, untracked).
 - In a scenario, a required foreign key to a row the current row is nested under further up (`order_items` under `customers > orders`, with a required `customer_id`) uses that row instead of being reported as a cycle.
 - The web app's link works in a second tab or from a bookmark while the server runs (the token is kept in the browser, not only in the tab).

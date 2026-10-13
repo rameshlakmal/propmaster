@@ -312,7 +312,7 @@ export function SessionsPage({ selectedId, activeProfile }: { selectedId?: strin
   if (selectedId) return <SessionDetail id={selectedId} />;
   return (
     <Box>
-      <PageHeader title="Sessions" description="Everything you have recorded on this database. Open one to see its timeline, export it or check rules." />
+      <PageHeader icon={<Rows weight="fill" />} tone="violet" title="Sessions" description="Everything you have recorded on this database. Open one to see its timeline, export it or check rules." />
       <SessionList activeProfile={activeProfile} />
     </Box>
   );
