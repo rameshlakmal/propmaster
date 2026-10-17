@@ -25,6 +25,22 @@ describe('parseRules', () => {
     ]);
   });
 
+  it('drops section comments between rules, so the semicolon before them still goes', () => {
+    const rules = parseRules([
+      '-- rule: Nothing is charged early',
+      'SELECT id FROM {{orders}} WHERE captured <> 0;',
+      '',
+      '-- ======================',
+      '-- Coupons',
+      '-- rule: Coupons are used within their limit',
+      'SELECT code FROM {{coupons}} WHERE uses > max_uses;',
+    ].join('\n'));
+    expect(rules.map((r) => r.sql)).toEqual([
+      'SELECT id FROM {{orders}} WHERE captured <> 0',
+      'SELECT code FROM {{coupons}} WHERE uses > max_uses',
+    ]);
+  });
+
   it('explains files it cannot use', () => {
     expect(() => parseRules('SELECT 1', 'r.sql')).toThrow('r.sql, line 1: SQL before the first "-- rule: <name>" line.');
     expect(() => parseRules('-- just a comment', 'r.sql')).toThrow('r.sql has no rules.');

@@ -49,7 +49,11 @@ export function parseRules(text: string, file = 'rules file'): Rule[] {
 
   const finish = () => {
     if (!current) return;
-    const sql = current.lines.join('\n').trim().replace(/;\s*$/, '').trim();
+    // Comment lines after the query (a section heading before the next rule) belong to no rule: drop them first,
+    // or the query's ";" isn't last and survives into the subquery the rule runs in.
+    const lines = [...current.lines];
+    while (lines.length && (!lines.at(-1)!.trim() || /^\s*--/.test(lines.at(-1)!))) lines.pop();
+    const sql = lines.join('\n').trim().replace(/;\s*$/, '').trim();
     const code = sql.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n').trim();
     if (!code) throw new UserError(`Rule "${current.name}" (${file}, line ${current.line}) has no query.`);
     rules.push({ name: current.name, sql, line: current.line });
